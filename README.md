@@ -23,8 +23,8 @@ A powerful AI-powered data analysis application built with React, TypeScript, an
 
 1. Clone the repository:
 ```bash
-git clone https://github.com/ahgeller/VolleyBall.git
-cd VolleyBall
+git clone https://github.com/ahgeller/ahgeller.github.io.git
+cd ahgeller.github.io
 ```
 
 2. Install dependencies:
@@ -102,4 +102,3 @@ MIT
 ## Contributing
 
 Contributions are welcome! Please feel free to submit a Pull Request.
-
