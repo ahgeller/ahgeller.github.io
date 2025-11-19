@@ -1,0 +1,2481 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>AI Chat - Puter</title>
+    <script src="https://js.puter.com/v2/"></script>
+    <script type="module">
+        // Import Neon serverless driver
+        import { neon } from 'https://esm.sh/@neondatabase/serverless@0.9.0';
+        window.neon = neon;
+    </script>
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif;
+            background: #343541;
+            min-height: 100vh;
+            color: #ececf1;
+        }
+
+        .login-container {
+            min-height: 100vh;
+            display: flex;
+            justify-content: center;
+            align-items: center;
+        }
+
+        .login-box {
+            background: #202123;
+            padding: 48px 40px;
+            border-radius: 8px;
+            max-width: 400px;
+            width: 90%;
+            box-shadow: 0 4px 24px rgba(0, 0, 0, 0.4);
+        }
+
+        .login-box h1 {
+            color: #ffffff;
+            margin-bottom: 8px;
+            font-size: 28px;
+            font-weight: 600;
+            text-align: center;
+        }
+
+        .login-box p {
+            color: #c5c5d2;
+            margin-bottom: 32px;
+            font-size: 14px;
+            text-align: center;
+        }
+
+        .login-btn {
+            background: #10a37f;
+            color: #ffffff;
+            border: none;
+            padding: 14px 24px;
+            font-size: 14px;
+            font-weight: 500;
+            cursor: pointer;
+            width: 100%;
+            border-radius: 6px;
+            transition: background 0.2s;
+        }
+
+        .login-btn:hover {
+            background: #0d8a6a;
+        }
+
+        .chat-container {
+            display: none;
+            flex-direction: column;
+            height: 100vh;
+        }
+
+        .chat-container.active {
+            display: flex;
+        }
+
+        .sidebar {
+            position: fixed;
+            left: 0;
+            top: 0;
+            width: 260px;
+            height: 100vh;
+            background: #202123;
+            padding: 8px;
+            display: flex;
+            flex-direction: column;
+            border-right: 1px solid #424242;
+            z-index: 100;
+            transition: transform 0.3s;
+        }
+
+        .sidebar.hidden {
+            transform: translateX(-100%);
+        }
+
+        .new-chat-btn {
+            background: transparent;
+            border: 1px solid #565869;
+            color: #ececf1;
+            padding: 12px 16px;
+            border-radius: 6px;
+            cursor: pointer;
+            font-size: 14px;
+            font-weight: 500;
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            margin-bottom: 8px;
+            transition: all 0.2s;
+        }
+
+        .new-chat-btn:hover {
+            background: #2a2b32;
+        }
+
+        .chat-history {
+            flex: 1;
+            overflow-y: auto;
+            margin-bottom: 8px;
+            padding-right: 4px;
+        }
+        
+        .chat-history::-webkit-scrollbar {
+            width: 6px;
+        }
+        
+        .chat-history::-webkit-scrollbar-track {
+            background: transparent;
+        }
+        
+        .chat-history::-webkit-scrollbar-thumb {
+            background: #565869;
+            border-radius: 3px;
+        }
+        
+        .chat-history::-webkit-scrollbar-thumb:hover {
+            background: #6e6f7f;
+        }
+
+        .chat-history-item {
+            padding: 10px 12px;
+            border-radius: 6px;
+            cursor: pointer;
+            font-size: 14px;
+            color: #ececf1;
+            transition: background 0.2s;
+            margin-bottom: 4px;
+            white-space: nowrap;
+            overflow: hidden;
+            text-overflow: ellipsis;
+            position: relative;
+            padding-right: 32px;
+            user-select: none;
+        }
+
+        .chat-history-item:hover {
+            background: #2a2b32;
+        }
+
+        .chat-history-item.active {
+            background: #343541;
+        }
+
+        .chat-history-item .delete-chat {
+            position: absolute;
+            right: 8px;
+            top: 50%;
+            transform: translateY(-50%);
+            background: #ef4444;
+            color: #fff;
+            border: none;
+            width: 20px;
+            height: 20px;
+            border-radius: 4px;
+            cursor: pointer;
+            font-size: 14px;
+            font-weight: 600;
+            display: none;
+            align-items: center;
+            justify-content: center;
+            transition: background 0.2s;
+            line-height: 1;
+        }
+        
+        .chat-history-item .delete-chat:hover {
+            background: #dc2626;
+        }
+
+        .chat-history-item:hover .delete-chat {
+            display: flex;
+        }
+
+        .sidebar-footer {
+            padding: 12px;
+            border-top: 1px solid #424242;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+        }
+
+        .user-info {
+            font-size: 13px;
+            color: #c5c5d2;
+        }
+
+        .logout-btn {
+            background: transparent;
+            border: none;
+            color: #c5c5d2;
+            cursor: pointer;
+            padding: 6px 12px;
+            border-radius: 4px;
+            font-size: 13px;
+            transition: background 0.2s;
+        }
+
+        .logout-btn:hover {
+            background: #2a2b32;
+        }
+
+        .main-content {
+            margin-left: 260px;
+            display: flex;
+            flex-direction: column;
+            height: 100vh;
+            transition: margin-left 0.3s;
+        }
+
+        .main-content.expanded {
+            margin-left: 0;
+        }
+
+        .chat-header {
+            padding: 16px 20px;
+            background: #343541;
+            border-bottom: 1px solid #424242;
+            display: flex;
+            align-items: center;
+            gap: 12px;
+            transition: display 0.2s;
+        }
+
+        .toggle-sidebar {
+            background: transparent;
+            border: none;
+            color: #ececf1;
+            cursor: pointer;
+            padding: 8px;
+            border-radius: 6px;
+            font-size: 18px;
+            transition: background 0.2s;
+        }
+
+        .toggle-sidebar:hover {
+            background: #40414f;
+        }
+
+        .model-display {
+            font-size: 14px;
+            font-weight: 500;
+            color: #ececf1;
+        }
+
+        .messages {
+            flex: 1;
+            overflow-y: auto;
+            display: flex;
+            flex-direction: column;
+            padding-bottom: 20px;
+        }
+
+        .messages::-webkit-scrollbar {
+            width: 8px;
+        }
+
+        .messages::-webkit-scrollbar-track {
+            background: transparent;
+        }
+
+        .messages::-webkit-scrollbar-thumb {
+            background: #565869;
+            border-radius: 4px;
+        }
+
+        .welcome-screen {
+            flex: 1;
+            display: flex;
+            flex-direction: column;
+            justify-content: center;
+            align-items: center;
+            padding: 32px;
+            text-align: center;
+        }
+
+        .welcome-screen h2 {
+            font-size: 32px;
+            margin-bottom: 16px;
+            font-weight: 600;
+        }
+
+        .welcome-screen p {
+            color: #c5c5d2;
+            font-size: 16px;
+            margin-bottom: 32px;
+        }
+
+        .message-wrapper {
+            width: 100%;
+            border-bottom: 1px solid #424242;
+            background: #343541;
+        }
+
+        .message-wrapper.assistant {
+            background: #444654;
+        }
+
+        .message {
+            max-width: 800px;
+            margin: 0 auto;
+            padding: 24px;
+            display: flex;
+            gap: 24px;
+        }
+
+        .message-avatar {
+            width: 32px;
+            height: 32px;
+            border-radius: 4px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            font-weight: 600;
+            font-size: 14px;
+            flex-shrink: 0;
+        }
+
+        .message-wrapper.user .message-avatar {
+            background: #5436da;
+            color: #fff;
+        }
+
+        .message-wrapper.assistant .message-avatar {
+            background: #19c37d;
+            color: #fff;
+        }
+
+        .message-content {
+            flex: 1;
+            line-height: 1.8;
+            font-size: 15px;
+            word-wrap: break-word;
+        }
+        
+        .message-content > *:first-child {
+            margin-top: 0;
+        }
+        
+        .message-content > *:last-child {
+            margin-bottom: 0;
+        }
+        
+        .message-content h1,
+        .message-content h2,
+        .message-content h3 {
+            margin-top: 1.5em;
+            margin-bottom: 0.75em;
+            font-weight: 600;
+            line-height: 1.3;
+        }
+        
+        .message-content h1 {
+            font-size: 1.5em;
+            border-bottom: 1px solid #565869;
+            padding-bottom: 0.5em;
+        }
+        
+        .message-content h2 {
+            font-size: 1.3em;
+            margin-top: 1.2em;
+        }
+        
+        .message-content h3 {
+            font-size: 1.1em;
+            margin-top: 1em;
+        }
+        
+        .message-content p {
+            margin-bottom: 1em;
+            line-height: 1.8;
+            color: #ececf1;
+        }
+        
+        .message-content p:last-child {
+            margin-bottom: 0;
+        }
+        
+        .message-content strong,
+        .message-content b {
+            font-weight: 600;
+            color: #ececf1;
+        }
+        
+        .message-content em,
+        .message-content i {
+            font-style: italic;
+        }
+        
+        .message-content ul,
+        .message-content ol {
+            margin: 1em 0;
+            padding-left: 1.5em;
+            line-height: 1.8;
+        }
+        
+        .message-content li {
+            margin-bottom: 0.5em;
+        }
+        
+        .message-content ul {
+            list-style-type: disc;
+        }
+        
+        .message-content ol {
+            list-style-type: decimal;
+        }
+        
+        .message-content code {
+            background: #2a2b32;
+            padding: 2px 6px;
+            border-radius: 4px;
+            font-family: 'Courier New', monospace;
+            font-size: 0.9em;
+            color: #10a37f;
+        }
+        
+        .message-content pre {
+            background: #2a2b32;
+            padding: 12px;
+            border-radius: 6px;
+            overflow-x: auto;
+            margin: 1em 0;
+            border: 1px solid #424242;
+        }
+        
+        .message-content pre code {
+            background: transparent;
+            padding: 0;
+            color: #ececf1;
+        }
+        
+        .message-content blockquote {
+            border-left: 3px solid #10a37f;
+            padding-left: 1em;
+            margin: 1em 0;
+            color: #c5c5d2;
+            font-style: italic;
+        }
+        
+        .message-content hr {
+            border: none;
+            border-top: 1px solid #424242;
+            margin: 1.5em 0;
+        }
+        
+        .message-content a {
+            color: #10a37f;
+            text-decoration: none;
+        }
+        
+        .message-content a:hover {
+            text-decoration: underline;
+        }
+        
+        .message-content table {
+            width: 100%;
+            border-collapse: collapse;
+            margin: 1em 0;
+        }
+        
+        .message-content th,
+        .message-content td {
+            padding: 8px 12px;
+            text-align: left;
+            border-bottom: 1px solid #424242;
+        }
+        
+        .message-content th {
+            background: #2a2b32;
+            font-weight: 600;
+        }
+
+        .message-images {
+            display: flex;
+            gap: 12px;
+            flex-wrap: wrap;
+            margin-bottom: 12px;
+        }
+
+        .message-images img {
+            max-width: 240px;
+            max-height: 240px;
+            object-fit: cover;
+            border-radius: 8px;
+            border: 1px solid #565869;
+        }
+
+        .input-section {
+            padding: 24px 0 80px 0;
+            background: #343541;
+            position: sticky;
+            bottom: 0;
+            z-index: 10;
+        }
+
+        .input-container {
+            max-width: 800px;
+            margin: 0 auto;
+            padding: 0 24px;
+        }
+
+        .model-selector {
+            display: flex;
+            gap: 8px;
+            margin-bottom: 16px;
+            flex-wrap: wrap;
+        }
+
+        .model-btn {
+            padding: 8px 16px;
+            border: 1px solid #565869;
+            background: #40414f;
+            color: #ececf1;
+            cursor: pointer;
+            font-size: 13px;
+            font-weight: 500;
+            border-radius: 6px;
+            transition: all 0.2s;
+        }
+        
+        .model-btn:disabled {
+            opacity: 0.6;
+            cursor: not-allowed;
+        }
+        
+        .match-search-input {
+            width: 100%;
+            padding: 10px 12px;
+            background: #40414f;
+            border: 1px solid #565869;
+            border-radius: 6px;
+            color: #ececf1;
+            font-size: 14px;
+            font-family: inherit;
+            outline: none;
+            transition: border-color 0.2s;
+        }
+        
+        .match-search-input:focus {
+            border-color: #10a37f;
+        }
+        
+        .match-search-input::placeholder {
+            color: #8e8ea0;
+        }
+        
+        .match-dropdown {
+            position: absolute;
+            top: 100%;
+            left: 0;
+            right: 0;
+            background: #202123;
+            border: 1px solid #565869;
+            border-radius: 6px;
+            margin-top: 4px;
+            max-height: 400px;
+            overflow-y: auto;
+            z-index: 1000;
+            box-shadow: 0 4px 12px rgba(0, 0, 0, 0.3);
+            display: flex;
+            flex-direction: column;
+        }
+        
+        .match-dropdown-content {
+            flex: 1;
+            overflow-y: auto;
+        }
+        
+        .match-dropdown::-webkit-scrollbar {
+            width: 6px;
+        }
+        
+        .match-dropdown::-webkit-scrollbar-track {
+            background: transparent;
+        }
+        
+        .match-dropdown::-webkit-scrollbar-thumb {
+            background: #565869;
+            border-radius: 3px;
+        }
+        
+        .match-option {
+            padding: 8px 12px;
+            cursor: pointer;
+            transition: background 0.2s;
+            border-bottom: 1px solid #2a2b32;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+        }
+        
+        .match-option:last-child {
+            border-bottom: none;
+        }
+        
+        .match-option:hover {
+            background: #2a2b32;
+        }
+        
+        .match-option.selected {
+            background: #343541;
+        }
+        
+        .match-option.highlighted {
+            background: #2a2b32;
+            outline: 2px solid #10a37f;
+            outline-offset: -2px;
+        }
+        
+        .match-option-content {
+            flex: 1;
+            min-width: 0;
+        }
+        
+        .match-option-title {
+            font-weight: 500;
+            color: #ececf1;
+            font-size: 13px;
+            white-space: nowrap;
+            overflow: hidden;
+            text-overflow: ellipsis;
+        }
+        
+        .match-option-id {
+            font-size: 11px;
+            color: #8e8ea0;
+            margin-top: 2px;
+        }
+        
+        .match-dropdown-footer {
+            padding: 8px 12px;
+            border-top: 1px solid #2a2b32;
+            background: #1a1b1e;
+            font-size: 11px;
+            color: #8e8ea0;
+            text-align: center;
+        }
+        
+        .match-option-empty {
+            padding: 16px;
+            text-align: center;
+            color: #8e8ea0;
+            font-size: 14px;
+        }
+        
+        .selected-match-display {
+            margin-top: 12px;
+            padding: 12px;
+            background: #2a2b32;
+            border: 1px solid #565869;
+            border-radius: 6px;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+        }
+        
+        .selected-match-info {
+            flex: 1;
+        }
+        
+        .selected-match-title {
+            font-weight: 500;
+            color: #ececf1;
+            margin-bottom: 4px;
+        }
+        
+        .selected-match-stats {
+            font-size: 12px;
+            color: #8e8ea0;
+        }
+        
+        .clear-match-btn {
+            background: transparent;
+            border: 1px solid #565869;
+            color: #c5c5d2;
+            padding: 6px 12px;
+            border-radius: 4px;
+            cursor: pointer;
+            font-size: 12px;
+            transition: all 0.2s;
+        }
+        
+        .clear-match-btn:hover {
+            background: #40414f;
+            border-color: #8e8ea0;
+        }
+
+        .model-btn.active {
+            background: #10a37f;
+            color: #fff;
+            border-color: #10a37f;
+        }
+
+        .model-btn:hover:not(.active) {
+            background: #4d4f5e;
+        }
+
+        .preview-images {
+            display: flex;
+            gap: 12px;
+            flex-wrap: wrap;
+            margin-bottom: 12px;
+        }
+
+        .preview-image {
+            position: relative;
+            width: 80px;
+            height: 80px;
+        }
+
+        .preview-image img {
+            width: 100%;
+            height: 100%;
+            object-fit: cover;
+            border-radius: 8px;
+            border: 1px solid #565869;
+        }
+
+        .preview-image .remove-image {
+            position: absolute;
+            top: -6px;
+            right: -6px;
+            background: #ef4444;
+            color: #fff;
+            border: none;
+            width: 22px;
+            height: 22px;
+            border-radius: 50%;
+            cursor: pointer;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            font-size: 14px;
+            font-weight: 600;
+            box-shadow: 0 2px 8px rgba(0, 0, 0, 0.3);
+        }
+
+        .input-wrapper {
+            display: flex;
+            align-items: flex-end;
+            background: #40414f;
+            border: 1px solid #565869;
+            border-radius: 12px;
+            padding: 12px;
+            transition: border-color 0.2s;
+            gap: 12px;
+        }
+
+        .input-wrapper:focus-within {
+            border-color: #10a37f;
+        }
+
+        .image-upload-btn {
+            background: transparent;
+            border: none;
+            color: #ececf1;
+            padding: 8px;
+            cursor: pointer;
+            font-size: 20px;
+            transition: all 0.2s;
+            border-radius: 6px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+        }
+
+        .image-upload-btn:hover {
+            background: #565869;
+        }
+
+        .image-input {
+            display: none;
+        }
+
+        .message-input {
+            flex: 1;
+            padding: 8px;
+            border: none;
+            background: transparent;
+            color: #ececf1;
+            font-size: 15px;
+            font-family: inherit;
+            resize: none;
+            outline: none;
+            max-height: 200px;
+            line-height: 1.5;
+        }
+
+        .message-input::placeholder {
+            color: #8e8ea0;
+        }
+
+        .send-btn {
+            background: #10a37f;
+            color: #fff;
+            border: none;
+            padding: 10px 16px;
+            cursor: pointer;
+            font-size: 14px;
+            font-weight: 500;
+            border-radius: 8px;
+            transition: background 0.2s;
+            display: flex;
+            align-items: center;
+            gap: 6px;
+        }
+
+        .send-btn:hover:not(:disabled) {
+            background: #0d8a6a;
+        }
+
+        .send-btn:disabled {
+            opacity: 0.5;
+            cursor: not-allowed;
+        }
+
+        .typing-indicator {
+            display: flex;
+            align-items: center;
+            gap: 6px;
+        }
+
+        .typing-dot {
+            width: 8px;
+            height: 8px;
+            background: #8e8ea0;
+            border-radius: 50%;
+            animation: typing 1.4s infinite;
+        }
+
+        .typing-dot:nth-child(2) {
+            animation-delay: 0.2s;
+        }
+
+        .typing-dot:nth-child(3) {
+            animation-delay: 0.4s;
+        }
+
+        @keyframes typing {
+            0%, 60%, 100% {
+                opacity: 0.3;
+            }
+            30% {
+                opacity: 1;
+            }
+        }
+
+        @media (max-width: 768px) {
+            .sidebar {
+                transform: translateX(-100%);
+            }
+            
+            .sidebar.visible {
+                transform: translateX(0);
+            }
+            
+            .main-content {
+                margin-left: 0;
+            }
+        }
+    </style>
+</head>
+<body>
+    <div class="login-container" id="loginContainer">
+        <div class="login-box">
+            <h1>AI Chat</h1>
+            <p>Sign in with Puter to continue</p>
+            <button class="login-btn" onclick="login()">Sign in with Puter</button>
+        </div>
+    </div>
+
+    <div class="chat-container" id="chatContainer">
+        <div class="sidebar" id="sidebar">
+            <button class="new-chat-btn" onclick="newChat()">
+                <span style="font-size: 18px;">+</span>
+                New chat
+            </button>
+            <div class="chat-history" id="chatHistory">
+            </div>
+            <div class="sidebar-footer">
+                <div class="user-info" id="userInfo">User</div>
+                <div style="display: flex; gap: 4px;">
+                    <button class="logout-btn" onclick="updateNeonConnectionString()" title="Update DB Connection">⚙️</button>
+                    <button class="logout-btn" onclick="logout()">Logout</button>
+                </div>
+            </div>
+        </div>
+
+        <div class="main-content" id="mainContent">
+            <div class="chat-header">
+                <button class="toggle-sidebar" onclick="toggleSidebar()">☰</button>
+                <div class="model-display" id="modelDisplay">Gemini 2.0 Flash</div>
+            </div>
+
+            <div class="messages" id="messages">
+                <div class="welcome-screen">
+                    <h2>How can I help you today?</h2>
+                    <p>Choose a model below and start chatting. You can also attach images.</p>
+                </div>
+            </div>
+
+            <div class="input-section">
+                <div class="input-container">
+                    <div class="model-selector">
+                        <button class="model-btn active" data-model="gemini-2.0-flash">Gemini 2.0 Flash</button>
+                        <button class="model-btn" data-model="gpt-4o-mini">GPT-4o Mini</button>
+                        <button class="model-btn" data-model="gpt-4o">GPT-4o</button>
+                        <button class="model-btn" data-model="claude-3-5-haiku-20241022">Claude 3.5 Haiku</button>
+                        <button class="model-btn" data-model="claude-sonnet-4-20250514">Claude Sonnet 4</button>
+                        <button class="model-btn" data-model="deepseek-chat">DeepSeek Chat</button>
+                        <button class="model-btn" data-model="gpt-5-nano">GPT-5 Nano</button>
+                    </div>
+                    <div id="volleyballSelector" style="display: none; margin-bottom: 16px;">
+                        <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 8px;">
+                            <label style="display: block; font-size: 13px; color: #c5c5d2; font-weight: 500;">
+                                <span style="margin-right: 6px;">🏐</span>Match Data
+                            </label>
+                            <span id="matchCount" style="font-size: 11px; color: #8e8ea0;"></span>
+                        </div>
+                        <div style="position: relative;">
+                            <input 
+                                type="text" 
+                                id="matchSearchInput" 
+                                placeholder="Type to search matches..." 
+                                class="match-search-input"
+                                autocomplete="off"
+                            />
+                            <div id="matchDropdown" class="match-dropdown" style="display: none;">
+                                <div class="match-dropdown-content" id="matchDropdownContent"></div>
+                                <div class="match-dropdown-footer" id="matchDropdownFooter"></div>
+                            </div>
+                        </div>
+                        <div id="selectedMatchDisplay" class="selected-match-display" style="display: none;"></div>
+                    </div>
+                    <div class="preview-images" id="previewImages"></div>
+                    <div class="input-wrapper">
+                        <button class="image-upload-btn" onclick="document.getElementById('imageInput').click()" title="Attach image">
+                            📎
+                        </button>
+                        <input type="file" id="imageInput" class="image-input" accept="image/*" onchange="handleImageSelect(event)">
+                        <textarea 
+                            class="message-input" 
+                            id="messageInput" 
+                            placeholder="Message AI Chat..."
+                            rows="1"
+                        ></textarea>
+                        <button class="send-btn" id="sendBtn" onclick="sendMessage()">
+                            <span>Send</span>
+                            <span>↑</span>
+                        </button>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        let currentModel = 'gemini-2.0-flash'; // Default model
+        let selectedImages = [];
+        let messageCount = 0;
+        let sidebarVisible = true;
+        let conversationHistory = [];
+        let currentChatId = null;
+        let savedChats = {};
+        
+        // Volleyball database state
+        let dbConnection = null;
+        let availableMatches = [];
+        let selectedMatchData = null;
+        let currentMatchId = null;
+        let matchContextSent = false; // Track if match context has been sent to avoid resending
+
+        // Load saved chats from localStorage
+        function loadSavedChats() {
+            const saved = localStorage.getItem('puterAIChats');
+            if (saved) {
+                savedChats = JSON.parse(saved);
+                updateChatHistory();
+            }
+        }
+
+        // Save chats to localStorage
+        function saveChats() {
+            localStorage.setItem('puterAIChats', JSON.stringify(savedChats));
+        }
+
+        // Update chat history sidebar
+        function updateChatHistory() {
+            const historyDiv = document.getElementById('chatHistory');
+            historyDiv.innerHTML = '';
+            
+            const chatIds = Object.keys(savedChats).sort((a, b) => 
+                savedChats[b].lastUpdate - savedChats[a].lastUpdate
+            );
+            
+            chatIds.forEach(chatId => {
+                const chat = savedChats[chatId];
+                const div = document.createElement('div');
+                div.className = `chat-history-item ${chatId === currentChatId ? 'active' : ''}`;
+                div.innerHTML = `
+                    <span style="flex: 1; overflow: hidden; text-overflow: ellipsis;">${chat.title}</span>
+                    <button class="delete-chat" onclick="deleteChat('${chatId}', event)">×</button>
+                `;
+                div.onclick = (e) => {
+                    if (e.target.classList.contains('delete-chat')) return;
+                    if (chatId !== currentChatId) {
+                        loadChat(chatId);
+                    }
+                };
+                historyDiv.appendChild(div);
+            });
+        }
+
+        // Delete a chat
+        function deleteChat(chatId, event) {
+            event.stopPropagation();
+            event.preventDefault();
+            if (confirm('Delete this chat?')) {
+                delete savedChats[chatId];
+                saveChats();
+                if (chatId === currentChatId) {
+                    newChat();
+                } else {
+                    updateChatHistory();
+                }
+            }
+        }
+
+        // Load a chat
+        function loadChat(chatId) {
+            const chat = savedChats[chatId];
+            if (!chat) return;
+            
+            // Save current chat before switching
+            if (conversationHistory.length > 0 && currentChatId && currentChatId !== chatId) {
+                saveCurrentChat();
+            }
+            
+            currentChatId = chatId;
+            currentModel = chat.model;
+            conversationHistory = chat.messages || [];
+            
+            // Reset volleyball match selection when switching chats
+            selectedMatchData = null;
+            currentMatchId = null;
+            matchContextSent = false;
+            const matchSearchInput = document.getElementById('matchSearchInput');
+            const selectedMatchDisplay = document.getElementById('selectedMatchDisplay');
+            if (matchSearchInput) {
+                matchSearchInput.value = '';
+            }
+            if (selectedMatchDisplay) {
+                selectedMatchDisplay.style.display = 'none';
+            }
+            hideMatchDropdown();
+            
+            // Update UI
+            document.querySelectorAll('.model-btn').forEach(btn => {
+                btn.classList.toggle('active', btn.dataset.model === currentModel);
+            });
+            document.getElementById('modelDisplay').textContent = 
+                document.querySelector(`.model-btn[data-model="${currentModel}"]`).textContent;
+            
+            // Render messages
+            const messagesDiv = document.getElementById('messages');
+            messagesDiv.innerHTML = '';
+            messageCount = 0;
+            conversationHistory.forEach(msg => {
+                addMessageToUI(msg.message, msg.images, msg.isUser);
+            });
+            
+            // Show welcome screen if no messages
+            if (conversationHistory.length === 0) {
+                messagesDiv.innerHTML = `
+                    <div class="welcome-screen">
+                        <h2>How can I help you today?</h2>
+                        <p>Choose a model below and start chatting. You can also attach images.</p>
+                    </div>
+                `;
+            }
+            
+            // Hide match selector, model selector, and chat header if this is an established chat (has messages)
+            const volleyballSelector = document.getElementById('volleyballSelector');
+            if (volleyballSelector && conversationHistory.length > 0) {
+                volleyballSelector.style.display = 'none';
+            } else if (volleyballSelector && dbConnection) {
+                volleyballSelector.style.display = 'block';
+            }
+            
+            // Hide model selector if established chat
+            const modelSelector = document.querySelector('.model-selector');
+            if (modelSelector) {
+                modelSelector.style.display = conversationHistory.length > 0 ? 'none' : 'flex';
+            }
+            
+            // Hide chat header if established chat
+            const chatHeader = document.querySelector('.chat-header');
+            if (chatHeader) {
+                chatHeader.style.display = conversationHistory.length > 0 ? 'none' : 'flex';
+            }
+            
+            updateChatHistory();
+        }
+
+        // Save current chat
+        function saveCurrentChat() {
+            if (conversationHistory.length === 0) return;
+            
+            if (!currentChatId) {
+                currentChatId = 'chat_' + Date.now();
+            }
+            
+            // Get title from first user message
+            const firstUserMessage = conversationHistory.find(msg => msg.isUser);
+            const titleText = firstUserMessage ? firstUserMessage.message.substring(0, 50) : 'New Chat';
+            const title = titleText.length < 50 ? titleText : titleText + '...';
+            
+            savedChats[currentChatId] = {
+                id: currentChatId,
+                title: title,
+                model: currentModel,
+                messages: [...conversationHistory], // Create a copy
+                lastUpdate: Date.now()
+            };
+            
+            saveChats();
+            updateChatHistory();
+        }
+
+        // Model selection with auto-new-chat
+        document.querySelectorAll('.model-btn').forEach(btn => {
+            // Only attach to model buttons, not the match selector
+            if (btn.dataset.model) {
+                btn.addEventListener('click', function() {
+                    const newModel = this.dataset.model;
+                    
+                    // If model changes and there are messages, create new chat
+                    if (newModel !== currentModel && conversationHistory.length > 0) {
+                        saveCurrentChat();
+                        currentModel = newModel;
+                        newChat();
+                    } else {
+                        currentModel = newModel;
+                    }
+                    
+                    document.querySelectorAll('.model-btn[data-model]').forEach(b => b.classList.remove('active'));
+                    this.classList.add('active');
+                    document.getElementById('modelDisplay').textContent = this.textContent;
+                });
+            }
+        });
+
+        // Toggle sidebar
+        function toggleSidebar() {
+            const sidebar = document.getElementById('sidebar');
+            const mainContent = document.getElementById('mainContent');
+            sidebarVisible = !sidebarVisible;
+            
+            if (sidebarVisible) {
+                sidebar.classList.remove('hidden');
+                mainContent.classList.remove('expanded');
+            } else {
+                sidebar.classList.add('hidden');
+                mainContent.classList.add('expanded');
+            }
+        }
+
+        // New chat
+        function newChat() {
+            // Save current chat if it has messages
+            if (conversationHistory.length > 0) {
+                saveCurrentChat();
+            }
+            
+            const messagesDiv = document.getElementById('messages');
+            messagesDiv.innerHTML = `
+                <div class="welcome-screen">
+                    <h2>How can I help you today?</h2>
+                    <p>Choose a model below and start chatting. You can also attach images.</p>
+                </div>
+            `;
+            selectedImages = [];
+            messageCount = 0;
+            conversationHistory = [];
+            currentChatId = null;
+            
+            // Reset volleyball match selection
+            selectedMatchData = null;
+            currentMatchId = null;
+            matchContextSent = false;
+            const matchSearchInput = document.getElementById('matchSearchInput');
+            const selectedMatchDisplay = document.getElementById('selectedMatchDisplay');
+            if (matchSearchInput) {
+                matchSearchInput.value = '';
+            }
+            if (selectedMatchDisplay) {
+                selectedMatchDisplay.style.display = 'none';
+            }
+            hideMatchDropdown();
+            
+            // Show match selector, model selector, and chat header for new chat
+            const volleyballSelector = document.getElementById('volleyballSelector');
+            if (volleyballSelector && dbConnection) {
+                volleyballSelector.style.display = 'block';
+            }
+            
+            // Show model selector buttons for new chat
+            const modelSelector = document.querySelector('.model-selector');
+            if (modelSelector) {
+                modelSelector.style.display = 'flex';
+            }
+            
+            // Show chat header for new chat
+            const chatHeader = document.querySelector('.chat-header');
+            if (chatHeader) {
+                chatHeader.style.display = 'flex';
+            }
+            
+            updateImagePreview();
+            updateChatHistory();
+        }
+
+        // Login functionality
+        async function login() {
+            try {
+                await puter.auth.signIn();
+                const user = await puter.auth.getUser();
+                document.getElementById('loginContainer').style.display = 'none';
+                document.getElementById('chatContainer').classList.add('active');
+                document.getElementById('userInfo').textContent = user.username || 'User';
+                loadSavedChats();
+            } catch (error) {
+                alert('Login failed: ' + error.message);
+            }
+        }
+
+        // Logout functionality
+        function logout() {
+            puter.auth.signOut();
+            document.getElementById('loginContainer').style.display = 'flex';
+            document.getElementById('chatContainer').classList.remove('active');
+            newChat();
+        }
+
+        // Check if already logged in
+        (async () => {
+            if (puter.auth.isSignedIn()) {
+                try {
+                    const user = await puter.auth.getUser();
+                    document.getElementById('loginContainer').style.display = 'none';
+                    document.getElementById('chatContainer').classList.add('active');
+                    document.getElementById('userInfo').textContent = user.username || 'User';
+                    loadSavedChats();
+                    
+                    // Initialize volleyball database connection
+                    await initVolleyballDB();
+                } catch (error) {
+                    console.error('Error getting user:', error);
+                }
+            }
+        })();
+        
+        // ========== VOLLEYBALL DATABASE FUNCTIONS ==========
+        
+        // Clean connection string - remove psql command syntax if present
+        function cleanConnectionString(connString) {
+            if (!connString) return null;
+            
+            // Remove leading/trailing whitespace
+            let cleaned = connString.trim();
+            
+            // Remove 'psql ' prefix if present
+            if (cleaned.startsWith('psql ')) {
+                cleaned = cleaned.substring(5).trim();
+            }
+            
+            // Remove surrounding single or double quotes
+            if ((cleaned.startsWith("'") && cleaned.endsWith("'")) ||
+                (cleaned.startsWith('"') && cleaned.endsWith('"'))) {
+                cleaned = cleaned.slice(1, -1).trim();
+            }
+            
+            // Ensure it starts with postgresql://
+            if (!cleaned.startsWith('postgresql://')) {
+                throw new Error('Connection string must start with postgresql://');
+            }
+            
+            return cleaned;
+        }
+        
+        // Get or store Neon connection string in localStorage
+        async function getNeonConnectionString() {
+            try {
+                // Try to get existing connection string from localStorage
+                let connString = localStorage.getItem('neon_connection_string');
+                
+                if (connString) {
+                    // Clean it in case it was stored with psql syntax
+                    connString = cleanConnectionString(connString);
+                    console.log('✅ Found stored connection string');
+                    return connString;
+                }
+                
+                // If not found, prompt user to enter it
+                console.log('No connection string found. Prompting user...');
+                const userInput = prompt(
+                    'Enter your Neon database connection string:\n\n' +
+                    'You can find this in your Neon Console under Connection Details.\n' +
+                    'Format: postgresql://user:password@host/database?sslmode=require\n\n' +
+                    'Example: postgresql://neondb_owner:password@ep-xxx.aws.neon.tech/neondb?sslmode=require\n\n' +
+                    'Note: Just paste the connection string (you can include psql syntax, it will be cleaned automatically)'
+                );
+                
+                if (!userInput || userInput.trim() === '') {
+                    throw new Error('Connection string is required');
+                }
+                
+                // Clean the connection string before storing
+                const cleaned = cleanConnectionString(userInput);
+                
+                // Store it in localStorage for future use
+                localStorage.setItem('neon_connection_string', cleaned);
+                console.log('✅ Connection string saved to localStorage');
+                
+                return cleaned;
+            } catch (error) {
+                console.error('Error managing connection string:', error);
+                throw error;
+            }
+        }
+        
+        // Optional: Function to update/change connection string
+        async function updateNeonConnectionString() {
+            try {
+                const newConnString = prompt(
+                    'Enter your new Neon connection string:\n\n' +
+                    'This will replace your existing stored connection string.\n\n' +
+                    'You can paste the full psql command - it will be cleaned automatically.'
+                );
+                
+                if (!newConnString || newConnString.trim() === '') {
+                    alert('Connection string cannot be empty');
+                    return false;
+                }
+                
+                // Clean the connection string before storing
+                const cleaned = cleanConnectionString(newConnString);
+                localStorage.setItem('neon_connection_string', cleaned);
+                console.log('✅ Connection string updated');
+                
+                // Reconnect to database
+                await initVolleyballDB();
+                return true;
+            } catch (error) {
+                console.error('Error updating connection string:', error);
+                alert('Failed to update connection string: ' + error.message);
+                return false;
+            }
+        }
+        
+        // Initialize database connection to Neon Postgres
+        async function initVolleyballDB() {
+            try {
+                console.log('Connecting to Neon Postgres...');
+                
+                // Get connection string from Puter storage (or prompt if first time)
+                const connectionString = await getNeonConnectionString();
+                
+                if (!window.neon) {
+                    throw new Error('Neon driver not loaded. Make sure the script tag is in the head.');
+                }
+                
+                const sql = window.neon(connectionString);
+                
+                // Fetch unique matches from combined_dvw table
+                const matchesResult = await sql`
+                    SELECT DISTINCT match_id, home_team, visiting_team 
+                    FROM combined_dvw 
+                    WHERE match_id IS NOT NULL 
+                    AND home_team IS NOT NULL 
+                    AND visiting_team IS NOT NULL
+                    ORDER BY match_id
+                `;
+                
+                availableMatches = matchesResult.map(row => ({
+                    match_id: row.match_id,
+                    home_team: row.home_team,
+                    visiting_team: row.visiting_team
+                }));
+                
+                populateMatchSelector();
+                dbConnection = sql; // Store connection for later queries
+                console.log('✅ Database connected. Matches loaded:', availableMatches.length);
+                
+                // Update match count display
+                const matchCountEl = document.getElementById('matchCount');
+                if (matchCountEl) {
+                    matchCountEl.textContent = `${availableMatches.length} match${availableMatches.length !== 1 ? 'es' : ''}`;
+                }
+            } catch (error) {
+                console.error('❌ Database connection failed:', error);
+                dbConnection = false;
+                
+                // If connection fails, offer to update connection string
+                if (error.message.includes('connection') || error.message.includes('authentication') || error.message.includes('ECONNREFUSED')) {
+                    const retry = confirm(
+                        'Failed to connect to database.\n\n' +
+                        'Error: ' + error.message + '\n\n' +
+                        'Would you like to update your connection string?'
+                    );
+                    if (retry) {
+                        await updateNeonConnectionString();
+                    }
+                } else {
+                    alert('Failed to connect to database: ' + error.message);
+                }
+            }
+        }
+        
+        // Match search functionality
+        let matchSearchTimeout = null;
+        let currentPage = 0; // Pagination for match dropdown
+        const matchesPerPage = 15;
+        
+        // Populate the match selector dropdown
+        function populateMatchSelector() {
+            // Show the volleyball selector
+            document.getElementById('volleyballSelector').style.display = 'block';
+            
+            const searchInput = document.getElementById('matchSearchInput');
+            const dropdown = document.getElementById('matchDropdown');
+            
+            // Setup search input
+            searchInput.addEventListener('input', handleMatchSearch);
+            searchInput.addEventListener('focus', function() {
+                if (this.value.trim()) {
+                    filterAndShowMatches(this.value.trim());
+                } else {
+                    showAllMatches();
+                }
+            });
+            
+            // Keyboard navigation with pagination support
+            searchInput.addEventListener('keydown', function(e) {
+                const content = document.getElementById('matchDropdownContent');
+                const options = content ? content.querySelectorAll('.match-option') : dropdown.querySelectorAll('.match-option');
+                const selected = content ? content.querySelector('.match-option.highlighted') : dropdown.querySelector('.match-option.highlighted');
+                
+                if (e.key === 'ArrowDown') {
+                    e.preventDefault();
+                    if (selected) {
+                        selected.classList.remove('highlighted');
+                        const next = selected.nextElementSibling;
+                        if (next) {
+                            next.classList.add('highlighted');
+                            next.scrollIntoView({ block: 'nearest' });
+                        } else if (options.length > 0) {
+                            // Move to next page if at end
+                            const filtered = availableMatches.filter(m => {
+                                const query = searchInput.value.trim().toLowerCase();
+                                if (!query) return true;
+                                const searchText = `${m.home_team} ${m.visiting_team} ${m.match_id}`.toLowerCase();
+                                return searchText.includes(query);
+                            });
+                            const totalPages = Math.ceil(filtered.length / matchesPerPage);
+                            if (currentPage < totalPages - 1) {
+                                currentPage++;
+                                const query = searchInput.value.trim().toLowerCase();
+                                if (query) {
+                                    filterAndShowMatches(query);
+                                } else {
+                                    showAllMatches();
+                                }
+                            } else {
+                                options[0].classList.add('highlighted');
+                            }
+                        }
+                    } else if (options[0]) {
+                        options[0].classList.add('highlighted');
+                    }
+                } else if (e.key === 'ArrowUp') {
+                    e.preventDefault();
+                    if (selected) {
+                        selected.classList.remove('highlighted');
+                        const prev = selected.previousElementSibling;
+                        if (prev) {
+                            prev.classList.add('highlighted');
+                            prev.scrollIntoView({ block: 'nearest' });
+                        } else if (currentPage > 0) {
+                            // Move to previous page
+                            currentPage--;
+                            const query = searchInput.value.trim().toLowerCase();
+                            if (query) {
+                                filterAndShowMatches(query);
+                            } else {
+                                showAllMatches();
+                            }
+                        } else if (options[options.length - 1]) {
+                            options[options.length - 1].classList.add('highlighted');
+                        }
+                    } else if (options[options.length - 1]) {
+                        options[options.length - 1].classList.add('highlighted');
+                    }
+                } else if (e.key === 'Enter' && selected) {
+                    e.preventDefault();
+                    const matchId = selected.getAttribute('data-match-id');
+                    if (matchId) selectMatch(matchId);
+                } else if (e.key === 'Escape') {
+                    hideMatchDropdown();
+                    searchInput.blur();
+                }
+            });
+            
+            // Close dropdown when clicking outside
+            document.addEventListener('click', function(e) {
+                if (!e.target.closest('#volleyballSelector')) {
+                    hideMatchDropdown();
+                }
+            });
+            
+            // Show all matches initially
+            showAllMatches();
+        }
+        
+        // Handle match search input
+        function handleMatchSearch(event) {
+            const query = event.target.value.trim().toLowerCase();
+            
+            clearTimeout(matchSearchTimeout);
+            matchSearchTimeout = setTimeout(() => {
+                if (query) {
+                    filterAndShowMatches(query);
+                } else {
+                    showAllMatches();
+                }
+            }, 200);
+        }
+        
+        // Filter and show matches based on search
+        function filterAndShowMatches(query) {
+            currentPage = 0; // Reset to first page on new search
+            const filtered = availableMatches.filter(match => {
+                const searchText = `${match.home_team} ${match.visiting_team} ${match.match_id}`.toLowerCase();
+                return searchText.includes(query);
+            });
+            
+            renderMatchOptions(filtered);
+        }
+        
+        // Show all matches
+        function showAllMatches() {
+            currentPage = 0; // Reset to first page
+            renderMatchOptions(availableMatches);
+        }
+        
+        // Render match options in dropdown with pagination
+        function renderMatchOptions(matches) {
+            const dropdown = document.getElementById('matchDropdown');
+            const content = document.getElementById('matchDropdownContent');
+            const footer = document.getElementById('matchDropdownFooter');
+            
+            if (!content) {
+                // Fallback for old structure
+                dropdown.innerHTML = '';
+                if (matches.length === 0) {
+                    dropdown.innerHTML = '<div class="match-option-empty">No matches found</div>';
+                    dropdown.style.display = 'block';
+                    return;
+                }
+                matches.forEach(match => {
+                    const option = document.createElement('div');
+                    option.className = `match-option ${match.match_id === currentMatchId ? 'selected' : ''}`;
+                    option.setAttribute('data-match-id', match.match_id);
+                    option.innerHTML = `
+                        <div class="match-option-content">
+                            <div class="match-option-title">${match.home_team} vs ${match.visiting_team}</div>
+                            <div class="match-option-id">${match.match_id}</div>
+                        </div>
+                    `;
+                    option.onclick = () => selectMatch(match.match_id);
+                    option.onmouseenter = function() {
+                        dropdown.querySelectorAll('.match-option').forEach(opt => opt.classList.remove('highlighted'));
+                        this.classList.add('highlighted');
+                    };
+                    dropdown.appendChild(option);
+                });
+                dropdown.style.display = 'block';
+                return;
+            }
+            
+            content.innerHTML = '';
+            
+            if (matches.length === 0) {
+                content.innerHTML = '<div class="match-option-empty">No matches found</div>';
+                footer.innerHTML = '';
+                dropdown.style.display = 'block';
+                return;
+            }
+            
+            // Update match count
+            const matchCountEl = document.getElementById('matchCount');
+            if (matchCountEl) {
+                matchCountEl.textContent = `${matches.length} match${matches.length !== 1 ? 'es' : ''}`;
+            }
+            
+            // Pagination
+            const totalPages = Math.ceil(matches.length / matchesPerPage);
+            const startIdx = currentPage * matchesPerPage;
+            const endIdx = Math.min(startIdx + matchesPerPage, matches.length);
+            const pageMatches = matches.slice(startIdx, endIdx);
+            
+            pageMatches.forEach(match => {
+                const option = document.createElement('div');
+                option.className = `match-option ${match.match_id === currentMatchId ? 'selected' : ''}`;
+                option.setAttribute('data-match-id', match.match_id);
+                option.innerHTML = `
+                    <div class="match-option-content">
+                        <div class="match-option-title">${match.home_team} vs ${match.visiting_team}</div>
+                        <div class="match-option-id">${match.match_id}</div>
+                    </div>
+                `;
+                option.onclick = () => selectMatch(match.match_id);
+                option.onmouseenter = function() {
+                    content.querySelectorAll('.match-option').forEach(opt => opt.classList.remove('highlighted'));
+                    this.classList.add('highlighted');
+                };
+                content.appendChild(option);
+            });
+            
+            // Footer with pagination info
+            if (totalPages > 1) {
+                footer.innerHTML = `Showing ${startIdx + 1}-${endIdx} of ${matches.length} • Page ${currentPage + 1}/${totalPages}`;
+            } else {
+                footer.innerHTML = `${matches.length} match${matches.length !== 1 ? 'es' : ''}`;
+            }
+            
+            dropdown.style.display = 'block';
+        }
+        
+        // Hide match dropdown
+        function hideMatchDropdown() {
+            const dropdown = document.getElementById('matchDropdown');
+            dropdown.style.display = 'none';
+            const content = document.getElementById('matchDropdownContent');
+            if (content) {
+                content.querySelectorAll('.match-option').forEach(opt => opt.classList.remove('highlighted'));
+            } else {
+                dropdown.querySelectorAll('.match-option').forEach(opt => opt.classList.remove('highlighted'));
+            }
+            currentPage = 0; // Reset to first page
+        }
+        
+        // Select a match
+        async function selectMatch(matchId) {
+            const searchInput = document.getElementById('matchSearchInput');
+            searchInput.value = '';
+            hideMatchDropdown();
+            
+            if (!matchId || matchId === currentMatchId) return;
+            
+            // If switching matches, clear previous match data first
+            if (currentMatchId && currentMatchId !== matchId) {
+                selectedMatchData = null;
+                matchContextSent = false;
+            }
+            
+            currentMatchId = matchId;
+            
+            // Show match selector when selecting a match
+            const volleyballSelector = document.getElementById('volleyballSelector');
+            if (volleyballSelector) {
+                volleyballSelector.style.display = 'block';
+            }
+            
+            // Show loading state
+            const selectedDisplay = document.getElementById('selectedMatchDisplay');
+            selectedDisplay.style.display = 'block';
+            selectedDisplay.innerHTML = '<div style="color: #8e8ea0;">Loading match data...</div>';
+            
+            try {
+                await loadMatchData(matchId);
+                updateSelectedMatchDisplay();
+            } catch (error) {
+                console.error('Error loading match:', error);
+                currentMatchId = null;
+                selectedDisplay.style.display = 'none';
+                alert('Failed to load match data. Please try again.');
+            }
+        }
+        
+        // Update selected match display
+        function updateSelectedMatchDisplay() {
+            if (!selectedMatchData) return;
+            
+            const { matchInfo, summary } = selectedMatchData;
+            const selectedDisplay = document.getElementById('selectedMatchDisplay');
+            
+            selectedDisplay.innerHTML = `
+                <div class="selected-match-info">
+                    <div class="selected-match-title">${matchInfo.home_team} vs ${matchInfo.visiting_team}</div>
+                    <div class="selected-match-stats">
+                        ${summary.totalActions} actions • ${summary.totalSets} sets • ID: ${currentMatchId}
+                    </div>
+                </div>
+                <button class="clear-match-btn" onclick="clearMatchSelection()">Clear</button>
+            `;
+            selectedDisplay.style.display = 'block';
+        }
+        
+        // Clear match selection
+        function clearMatchSelection() {
+            selectedMatchData = null;
+            currentMatchId = null;
+            matchContextSent = false;
+            const searchInput = document.getElementById('matchSearchInput');
+            const selectedDisplay = document.getElementById('selectedMatchDisplay');
+            if (searchInput) searchInput.value = '';
+            if (selectedDisplay) selectedDisplay.style.display = 'none';
+            hideMatchDropdown();
+        }
+        
+        
+        // Load match data from database
+        async function loadMatchData(matchId) {
+            try {
+                console.log('Loading match data for:', matchId);
+                
+                if (!dbConnection) {
+                    throw new Error('Database not connected');
+                }
+                
+                // Find match info
+                const matchInfo = availableMatches.find(m => m.match_id === matchId);
+                if (!matchInfo) {
+                    throw new Error('Match not found');
+                }
+                
+                // Query all rows for this match from combined_dvw table
+                const dataResult = await dbConnection`
+                    SELECT 
+                        match_id,
+                        point_id,
+                        video_time,
+                        team,
+                        player_number,
+                        player_name,
+                        skill_type,
+                        evaluation,
+                        home_team_score,
+                        visiting_team_score,
+                        set_number,
+                        start_zone,
+                        end_zone,
+                        phase,
+                        home_team,
+                        visiting_team,
+                        point_won_by,
+                        skill_subtype,
+                        evaluation_code,
+                        attack_code,
+                        attack_description,
+                        set_code,
+                        set_description,
+                        point_phase,
+                        attack_phase,
+                        reception_quality
+                    FROM combined_dvw 
+                    WHERE match_id = ${matchId}
+                    ORDER BY point_id, video_time
+                `;
+                
+                // Convert database rows to our format
+                const data = dataResult.map(row => ({
+                    match_id: row.match_id,
+                    point_id: row.point_id,
+                    video_time: row.video_time || 0,
+                    team: row.team,
+                    player_number: row.player_number,
+                    player_name: row.player_name || `Player ${row.player_number || ''}`,
+                    skill_type: row.skill_type,
+                    evaluation: row.evaluation,
+                    evaluation_code: row.evaluation_code,
+                    home_team_score: row.home_team_score,
+                    visiting_team_score: row.visiting_team_score,
+                    set_number: row.set_number,
+                    start_zone: row.start_zone,
+                    end_zone: row.end_zone,
+                    phase: row.phase,
+                    home_team: row.home_team,
+                    visiting_team: row.visiting_team,
+                    point_won_by: row.point_won_by,
+                    skill_subtype: row.skill_subtype,
+                    attack_code: row.attack_code,
+                    attack_description: row.attack_description,
+                    set_code: row.set_code,
+                    set_description: row.set_description,
+                    point_phase: row.point_phase,
+                    attack_phase: row.attack_phase,
+                    reception_quality: row.reception_quality
+                }));
+                
+                selectedMatchData = {
+                    matchId: matchId,
+                    matchInfo: matchInfo,
+                    data: data,
+                    summary: generateMatchSummary(data, matchInfo)
+                };
+                
+                console.log('✅ Match data loaded:', data.length, 'actions');
+                
+                // Reset context sent flag when new match is loaded
+                matchContextSent = false;
+                
+                // Show feedback message
+                if (conversationHistory.length === 0 || messageCount === 0) {
+                    const messagesDiv = document.getElementById('messages');
+                    if (messagesDiv.querySelector('.welcome-screen')) {
+                        messagesDiv.innerHTML = '';
+                        messageCount = 0;
+                    }
+                }
+                
+                // Show user feedback
+                addMessage(
+                    `✅ Loaded match data: ${matchInfo.home_team} vs ${matchInfo.visiting_team}\n` +
+                    `📊 ${data.length} actions recorded\n` +
+                    `🏐 ${selectedMatchData.summary.totalSets} sets played\n\n` +
+                    `I'm now ready to answer coaching questions about this match!`,
+                    null,
+                    false
+                );
+                
+            } catch (error) {
+                console.error('❌ Error loading match data:', error);
+                throw error; // Re-throw to be handled by caller
+            }
+        }
+        
+        // Generate match summary for GPT context with enhanced analytics
+        function generateMatchSummary(data, matchInfo) {
+            const attacks = data.filter(d => d.skill_type === 'Attack');
+            const serves = data.filter(d => d.skill_type === 'Serve');
+            const receptions = data.filter(d => d.skill_type === 'Reception');
+            const blocks = data.filter(d => d.skill_type === 'Block');
+            const setSkills = data.filter(d => d.skill_type === 'Set');
+            const digs = data.filter(d => d.skill_type === 'Dig');
+            
+            const homeAttacks = attacks.filter(a => a.team === matchInfo.home_team);
+            const visitingAttacks = attacks.filter(a => a.team === matchInfo.visiting_team);
+            const homeServes = serves.filter(s => s.team === matchInfo.home_team);
+            const visitingServes = serves.filter(s => s.team === matchInfo.visiting_team);
+            const homeReceptions = receptions.filter(r => r.team === matchInfo.home_team);
+            const visitingReceptions = receptions.filter(r => r.team === matchInfo.visiting_team);
+            
+            // Calculate attack efficiency
+            const homeKills = homeAttacks.filter(a => a.evaluation === 'Perfect' || a.evaluation === 'Good').length;
+            const visitingKills = visitingAttacks.filter(a => a.evaluation === 'Perfect' || a.evaluation === 'Good').length;
+            const homeErrors = homeAttacks.filter(a => a.evaluation === 'Error').length;
+            const visitingErrors = visitingAttacks.filter(a => a.evaluation === 'Error').length;
+            
+            const homeEfficiency = homeAttacks.length > 0 ? ((homeKills / homeAttacks.length) * 100).toFixed(1) : 0;
+            const visitingEfficiency = visitingAttacks.length > 0 ? ((visitingKills / visitingAttacks.length) * 100).toFixed(1) : 0;
+            
+            // Serve statistics
+            const homeAces = homeServes.filter(s => s.evaluation === 'Perfect').length;
+            const visitingAces = visitingServes.filter(s => s.evaluation === 'Perfect').length;
+            const homeServeErrors = homeServes.filter(s => s.evaluation === 'Error').length;
+            const visitingServeErrors = visitingServes.filter(s => s.evaluation === 'Error').length;
+            
+            // Reception quality
+            const homePerfectReceptions = homeReceptions.filter(r => r.reception_quality === 'Perfect' || r.evaluation === 'Perfect').length;
+            const visitingPerfectReceptions = visitingReceptions.filter(r => r.reception_quality === 'Perfect' || r.evaluation === 'Perfect').length;
+            const homeReceptionEfficiency = homeReceptions.length > 0 ? ((homePerfectReceptions / homeReceptions.length) * 100).toFixed(1) : 0;
+            const visitingReceptionEfficiency = visitingReceptions.length > 0 ? ((visitingPerfectReceptions / visitingReceptions.length) * 100).toFixed(1) : 0;
+            
+            // Get set scores and point differentials
+            const sets = {};
+            let homeTotalPoints = 0;
+            let visitingTotalPoints = 0;
+            data.forEach(d => {
+                if (!sets[d.set_number]) {
+                    sets[d.set_number] = { home: 0, visiting: 0 };
+                }
+                sets[d.set_number].home = Math.max(sets[d.set_number].home, d.home_team_score);
+                sets[d.set_number].visiting = Math.max(sets[d.set_number].visiting, d.visiting_team_score);
+                if (d.point) {
+                    if (d.point_won_by === matchInfo.home_team) homeTotalPoints++;
+                    else if (d.point_won_by === matchInfo.visiting_team) visitingTotalPoints++;
+                }
+            });
+            
+            // Calculate set wins
+            let homeSetWins = 0;
+            let visitingSetWins = 0;
+            Object.values(sets).forEach(set => {
+                if (set.home > set.visiting) homeSetWins++;
+                else if (set.visiting > set.home) visitingSetWins++;
+            });
+            
+            return {
+                totalActions: data.length,
+                totalAttacks: attacks.length,
+                totalServes: serves.length,
+                totalReceptions: receptions.length,
+                totalBlocks: blocks.length,
+                totalSetSkills: setSkills.length,
+                totalDigs: digs.length,
+                homeAttackEfficiency: homeEfficiency,
+                visitingAttackEfficiency: visitingEfficiency,
+                homeAttacks: homeAttacks.length,
+                visitingAttacks: visitingAttacks.length,
+                homeAttackErrors: homeErrors,
+                visitingAttackErrors: visitingErrors,
+                homeAces: homeAces,
+                visitingAces: visitingAces,
+                homeServeErrors: homeServeErrors,
+                visitingServeErrors: visitingServeErrors,
+                homeReceptionEfficiency: homeReceptionEfficiency,
+                visitingReceptionEfficiency: visitingReceptionEfficiency,
+                homeReceptions: homeReceptions.length,
+                visitingReceptions: visitingReceptions.length,
+                setScores: sets,
+                homeSetWins: homeSetWins,
+                visitingSetWins: visitingSetWins,
+                homeTotalPoints: homeTotalPoints,
+                visitingTotalPoints: visitingTotalPoints
+            };
+        }
+        
+        // Build enhanced context for GPT with volleyball data
+        function buildVolleyballContext(userMessage, isFirstMessage = false) {
+            let context = '';
+            
+            if (selectedMatchData) {
+                const { matchInfo, data, summary } = selectedMatchData;
+                
+                if (isFirstMessage || !matchContextSent) {
+                    // First message with match - send full context with enhanced analytics
+                    context = `You are an expert volleyball analyst and coach with deep knowledge of volleyball strategy, tactics, player development, and match analysis. You are helping the coach of the University of California, San Diego (UCSD) volleyball team analyze match data. The team you are analyzing for is UCSD. You have access to detailed match statistics and should provide specific, actionable insights tailored to helping UCSD improve their performance.
+
+IMPORTANT: The team you are coaching/analyzing for is the University of California, San Diego (UCSD). Always consider UCSD's perspective when providing analysis and recommendations.
+
+CURRENT MATCH: ${matchInfo.home_team} vs ${matchInfo.visiting_team} (${currentMatchId})
+
+MATCH OVERVIEW:
+- Total Actions Recorded: ${summary.totalActions}
+- Sets Played: ${summary.totalSets}
+- Match Result: ${matchInfo.home_team} won ${summary.homeSetWins} sets, ${matchInfo.visiting_team} won ${summary.visitingSetWins} sets
+
+SET SCORES:
+${Object.entries(summary.setScores).map(([set, scores]) => 
+    `Set ${set}: ${matchInfo.home_team} ${scores.home} - ${scores.visiting} ${matchInfo.visiting_team}`
+).join('\n')}
+
+ATTACK STATISTICS:
+- ${matchInfo.home_team}: ${summary.homeAttacks} attacks, ${summary.homeAttackEfficiency}% efficiency, ${summary.homeAttackErrors} errors
+- ${matchInfo.visiting_team}: ${summary.visitingAttacks} attacks, ${summary.visitingAttackEfficiency}% efficiency, ${summary.visitingAttackErrors} errors
+
+SERVE STATISTICS:
+- ${matchInfo.home_team}: ${summary.homeAces} aces, ${summary.homeServeErrors} errors
+- ${matchInfo.visiting_team}: ${summary.visitingAces} aces, ${summary.visitingServeErrors} errors
+
+RECEPTION STATISTICS:
+- ${matchInfo.home_team}: ${summary.homeReceptions} receptions, ${summary.homeReceptionEfficiency}% perfect receptions
+- ${matchInfo.visiting_team}: ${summary.visitingReceptions} receptions, ${summary.visitingReceptionEfficiency}% perfect receptions
+
+SKILL BREAKDOWN:
+- Total Attacks: ${summary.totalAttacks}
+- Total Serves: ${summary.totalServes}
+- Total Receptions: ${summary.totalReceptions}
+- Total Blocks: ${summary.totalBlocks}
+- Total Digs: ${summary.totalDigs || 0}
+- Total Set Skills: ${summary.totalSetSkills || 0}
+
+SAMPLE ACTIONS (first 30 for context):
+${data.slice(0, 30).map(a => 
+    `Point ${a.point_id} (Set ${a.set_number}): ${a.team} - ${a.player_name || 'Player'} (#${a.player_number || 'N/A'}) - ${a.skill_type}${a.skill_subtype ? ' (' + a.skill_subtype + ')' : ''} - ${a.evaluation}${a.reception_quality ? ' [Reception: ' + a.reception_quality + ']' : ''}${a.attack_description ? ' - ' + a.attack_description : ''}`
+).join('\n')}
+
+DATA AVAILABILITY:
+The coach has access to ${data.length} total actions with detailed information including:
+- Player numbers and names
+- Skill types and subtypes (Attack, Serve, Reception, Set, Block, Dig)
+- Evaluation codes and descriptions
+- Attack codes and descriptions
+- Set codes and descriptions
+- Point phases and attack phases
+- Reception quality ratings
+- Zone coordinates (start_zone, end_zone)
+- Set numbers and scores
+- Video timestamps
+
+When analyzing, consider:
+1. Attack efficiency and error rates for both teams
+2. Serve effectiveness (aces vs errors)
+3. Reception quality and its impact on offense
+4. Set-by-set performance trends
+5. Player-specific performance patterns
+6. Zone-based attack/defense effectiveness
+7. Phase-specific performance (Reception, Transition, Defense)
+
+COACH'S QUESTION: ${userMessage}
+
+IMPORTANT: Format your response using markdown for better readability:
+- Use **bold** for important names, statistics, and key points
+- Use bullet points (-) or numbered lists (1. 2. 3.) for multiple items
+- Use headers (##) for major sections
+- Use line breaks between paragraphs for clarity
+- Structure your response with clear sections and spacing
+
+Provide specific, actionable insights based on the actual match data. Reference specific statistics, identify patterns, and suggest concrete coaching strategies.`;
+                    matchContextSent = true;
+                } else {
+                    // Subsequent messages - just reference the match briefly
+                    context = buildConversationContext(userMessage);
+                    // Add a brief match reference at the end
+                    context += `\n\n[Note: We are analyzing the match ${matchInfo.home_team} vs ${matchInfo.visiting_team} (${currentMatchId}) with ${data.length} total actions. You have access to all match data from previous context.]`;
+                }
+            } else {
+                // No match selected - provide regular context
+                context = buildConversationContext(userMessage);
+            }
+            
+            return context;
+        }
+
+        // Handle image selection (single image only)
+        function handleImageSelect(event) {
+            const file = event.target.files[0];
+            if (!file) return;
+            
+            // Clear previous images (only one at a time)
+            selectedImages = [];
+            
+            const reader = new FileReader();
+            reader.onload = function(e) {
+                selectedImages.push({
+                    data: e.target.result,
+                    file: file
+                });
+                updateImagePreview();
+            };
+            reader.readAsDataURL(file);
+            event.target.value = '';
+        }
+
+        // Update image preview
+        function updateImagePreview() {
+            const previewContainer = document.getElementById('previewImages');
+            previewContainer.innerHTML = '';
+            selectedImages.forEach((img, index) => {
+                const div = document.createElement('div');
+                div.className = 'preview-image';
+                div.innerHTML = `
+                    <img src="${img.data}" alt="Preview">
+                    <button class="remove-image" onclick="removeImage(${index})">×</button>
+                `;
+                previewContainer.appendChild(div);
+            });
+        }
+
+        // Remove image
+        function removeImage(index) {
+            selectedImages.splice(index, 1);
+            updateImagePreview();
+        }
+
+        // Enhanced markdown parser for better formatting
+        function parseMarkdown(text) {
+            try {
+                // Ensure text is a string
+                if (!text) return '';
+                if (typeof text !== 'string') {
+                    text = String(text);
+                }
+                
+                let html = text;
+                
+                // Escape HTML first (but preserve code blocks)
+                const codeBlocks = [];
+                html = html.replace(/```[\s\S]*?```/g, function(match) {
+                    const id = 'CODEBLOCK_' + codeBlocks.length;
+                    codeBlocks.push(match);
+                    return id;
+                });
+                
+                const inlineCodes = [];
+                html = html.replace(/`[^`]+`/g, function(match) {
+                    const id = 'INLINECODE_' + inlineCodes.length;
+                    inlineCodes.push(match);
+                    return id;
+                });
+                
+                // Now escape HTML
+                html = html.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+                
+                // Restore code blocks and inline codes
+                codeBlocks.forEach((code, i) => {
+                    html = html.replace('CODEBLOCK_' + i, code);
+                });
+                inlineCodes.forEach((code, i) => {
+                    html = html.replace('INLINECODE_' + i, code);
+                });
+                
+                // Process code blocks
+                html = html.replace(/```([\s\S]*?)```/g, function(match, code) {
+                    const cleanCode = code.replace(/&lt;/g, '<').replace(/&gt;/g, '>').replace(/&amp;/g, '&');
+                    return '<pre><code>' + cleanCode.trim() + '</code></pre>';
+                });
+                
+                // Process inline code
+                html = html.replace(/`([^`]+)`/g, function(match, code) {
+                    const cleanCode = code.replace(/&lt;/g, '<').replace(/&gt;/g, '>').replace(/&amp;/g, '&');
+                    return '<code>' + cleanCode + '</code>';
+                });
+                
+                // Headers (must be on their own line)
+                html = html.replace(/^### (.*)$/gim, '<h3>$1</h3>');
+                html = html.replace(/^## (.*)$/gim, '<h2>$1</h2>');
+                html = html.replace(/^# (.*)$/gim, '<h1>$1</h1>');
+                
+                // Bold (**text** or __text__) - but not in code
+                html = html.replace(/\*\*([^*]+)\*\*/g, '<strong>$1</strong>');
+                html = html.replace(/__([^_]+)__/g, '<strong>$1</strong>');
+                
+                // Italic (*text* or _text_) - but not in code or bold (simpler approach)
+                // Only process italic if not already bold
+                html = html.replace(/(?:\*\*|__)([^*_]+)(?:\*\*|__)/g, function(match, content) {
+                    return match; // Keep bold as is
+                });
+                html = html.replace(/\*([^*\n]+)\*/g, function(match, content) {
+                    // Skip if it's part of bold
+                    if (match.includes('**')) return match;
+                    return '<em>' + content + '</em>';
+                });
+                html = html.replace(/_([^_\n]+)_/g, function(match, content) {
+                    // Skip if it's part of bold
+                    if (match.includes('__')) return match;
+                    return '<em>' + content + '</em>';
+                });
+                
+                // Process lists - handle bullet points with dashes
+                // Ensure html is still a string
+                if (typeof html !== 'string') {
+                    html = String(html);
+                }
+                
+                const lines = html.split('\n');
+                let inList = false;
+                let listType = null;
+                const processedLines = [];
+                
+                for (let i = 0; i < lines.length; i++) {
+                    const line = String(lines[i] || '');
+                    const listMatch = line.match(/^(\s*)([-*+]|\d+\.)\s+(.+)$/);
+                    
+                    if (listMatch) {
+                        const isOrdered = /^\d+\./.test(listMatch[2]);
+                        const currentType = isOrdered ? 'ol' : 'ul';
+                        
+                        if (!inList || listType !== currentType) {
+                            if (inList) {
+                                processedLines.push(`</${listType}>`);
+                            }
+                            processedLines.push(`<${currentType}>`);
+                            inList = true;
+                            listType = currentType;
+                        }
+                        processedLines.push(`<li>${listMatch[3]}</li>`);
+                    } else {
+                        if (inList) {
+                            processedLines.push(`</${listType}>`);
+                            inList = false;
+                            listType = null;
+                        }
+                        processedLines.push(line);
+                    }
+                }
+                
+                if (inList) {
+                    processedLines.push(`</${listType}>`);
+                }
+                
+                html = processedLines.join('\n');
+                
+                // Ensure html is still a string after list processing
+                if (typeof html !== 'string') {
+                    html = String(html);
+                }
+                
+                // Horizontal rules
+                html = html.replace(/^---$/gim, '<hr>');
+                html = html.replace(/^\*\*\*$/gim, '<hr>');
+                
+                // Blockquotes
+                html = html.replace(/^&gt; (.+)$/gim, '<blockquote>$1</blockquote>');
+                
+                // Links [text](url)
+                html = html.replace(/\[([^\]]+)\]\(([^)]+)\)/g, '<a href="$2" target="_blank" rel="noopener">$1</a>');
+                
+                // Convert double newlines to paragraphs, single newlines to <br>
+                // Ensure html is still a string
+                if (typeof html !== 'string') {
+                    html = String(html);
+                }
+                
+                const paragraphs = html.split(/\n\n+/);
+                html = paragraphs.map(para => {
+                    para = String(para || '').trim();
+                    if (!para) return '';
+                    
+                    // Don't wrap if it's already a block element
+                    if (/^<(h[1-6]|ul|ol|pre|blockquote|hr)/.test(para)) {
+                        return para;
+                    }
+                    
+                    // Convert single newlines to <br> but preserve existing HTML
+                    para = para.replace(/\n/g, '<br>');
+                    return '<p>' + para + '</p>';
+                }).join('');
+                
+                // Ensure html is still a string after paragraph processing
+                if (typeof html !== 'string') {
+                    html = String(html);
+                }
+                
+                // Clean up empty paragraphs and fix nested tags
+                html = html.replace(/<p><\/p>/g, '');
+                html = html.replace(/<p>(<[^>]+>)<\/p>/g, '$1');
+                html = html.replace(/<p>\s*<\/p>/g, '');
+                
+                // Final safety check
+                return typeof html === 'string' ? html : String(html || '');
+            } catch (error) {
+                console.error('Error parsing markdown:', error);
+                // Fallback: just return the text with line breaks converted
+                return String(text || '').replace(/\n/g, '<br>');
+            }
+        }
+        
+        // Add message to UI only
+        function addMessageToUI(text, images, isUser) {
+            const messagesDiv = document.getElementById('messages');
+            
+            // Remove welcome screen on first message
+            if (messageCount === 0) {
+                messagesDiv.innerHTML = '';
+            }
+            messageCount++;
+
+            const messageWrapper = document.createElement('div');
+            messageWrapper.className = `message-wrapper ${isUser ? 'user' : 'assistant'}`;
+            
+            let imagesHtml = '';
+            if (images && images.length > 0) {
+                imagesHtml = '<div class="message-images">' + 
+                    images.map(img => `<img src="${img}" alt="Attached image">`).join('') + 
+                    '</div>';
+            }
+            
+            // Parse markdown for assistant messages, plain text for user messages
+            const contentHtml = isUser ? text.replace(/\n/g, '<br>') : parseMarkdown(text);
+            
+            messageWrapper.innerHTML = `
+                <div class="message">
+                    <div class="message-avatar">${isUser ? 'U' : 'AI'}</div>
+                    <div class="message-content">
+                        ${imagesHtml}
+                        ${contentHtml}
+                    </div>
+                </div>
+            `;
+            messagesDiv.appendChild(messageWrapper);
+            messagesDiv.scrollTop = messagesDiv.scrollHeight;
+        }
+
+        // Add message (UI + history)
+        function addMessage(text, images, isUser) {
+            addMessageToUI(text, images, isUser);
+            
+            // Save to conversation history
+            conversationHistory.push({
+                message: text,
+                images: images,
+                isUser: isUser
+            });
+        }
+
+        // Show/hide typing indicator
+        function showTyping(show) {
+            const messagesDiv = document.getElementById('messages');
+            let typingWrapper = document.getElementById('typingWrapper');
+            
+            if (show) {
+                if (!typingWrapper) {
+                    typingWrapper = document.createElement('div');
+                    typingWrapper.className = 'message-wrapper assistant';
+                    typingWrapper.id = 'typingWrapper';
+                    typingWrapper.innerHTML = `
+                        <div class="message">
+                            <div class="message-avatar">AI</div>
+                            <div class="message-content">
+                                <div class="typing-indicator">
+                                    <div class="typing-dot"></div>
+                                    <div class="typing-dot"></div>
+                                    <div class="typing-dot"></div>
+                                </div>
+                            </div>
+                        </div>
+                    `;
+                    messagesDiv.appendChild(typingWrapper);
+                }
+            } else {
+                if (typingWrapper) {
+                    typingWrapper.remove();
+                }
+            }
+            messagesDiv.scrollTop = messagesDiv.scrollHeight;
+        }
+
+        // Build conversation context for the AI
+        function buildConversationContext(newMessage) {
+            // Build a context string from the last few messages
+            let context = '';
+            
+            // Include last 6 messages (3 exchanges) for context
+            const recentMessages = conversationHistory.slice(-6);
+            
+            if (recentMessages.length > 0) {
+                context = 'You are an expert volleyball analyst and coach. The team you are helping is the University of California, San Diego (UCSD) volleyball team. For your understanding, everything sent before the bottom text was my previous messages to you, but I can only send one at a time.\n\n';
+                context += 'Previous conversation:\n';
+                recentMessages.forEach(msg => {
+                    if (msg.isUser) {
+                        context += `User: ${msg.message}\n`;
+                    } else {
+                        context += `Assistant: ${msg.message}\n`;
+                    }
+                });
+                context += `\nUser: ${newMessage}\n\nPlease respond to the user's latest message, taking into account the conversation history above. Remember you are an expert volleyball analyst helping the UCSD volleyball team.\n\nIMPORTANT: Format your response using markdown for better readability:\n- Use **bold** for important names, statistics, and key points\n- Use bullet points (-) or numbered lists (1. 2. 3.) for multiple items\n- Use headers (##) for major sections\n- Use line breaks between paragraphs for clarity\n- Structure your response with clear sections and spacing`;
+            } else {
+                context = 'You are an expert volleyball analyst and coach helping the University of California, San Diego (UCSD) volleyball team.\n\n' + newMessage + '\n\nIMPORTANT: Format your response using markdown for better readability:\n- Use **bold** for important names, statistics, and key points\n- Use bullet points (-) or numbered lists (1. 2. 3.) for multiple items\n- Use headers (##) for major sections\n- Use line breaks between paragraphs for clarity\n- Structure your response with clear sections and spacing';
+            }
+            
+            return context;
+        }
+
+        // Send message
+        async function sendMessage() {
+            const input = document.getElementById('messageInput');
+            const message = input.value.trim();
+            
+            if (!message && selectedImages.length === 0) return;
+
+            const imagesToSend = [...selectedImages];
+            
+            // Add user message
+            addMessage(message || "What's in this image?", imagesToSend.map(img => img.data), true);
+            
+            // Hide match selector, model selector, and chat header after sending message to give more room for chat
+            const volleyballSelector = document.getElementById('volleyballSelector');
+            if (volleyballSelector && conversationHistory.length > 0) {
+                volleyballSelector.style.display = 'none';
+            }
+            
+            // Hide model selector buttons after first message
+            const modelSelector = document.querySelector('.model-selector');
+            if (modelSelector && conversationHistory.length > 0) {
+                modelSelector.style.display = 'none';
+            }
+            
+            // Hide chat header after first message
+            const chatHeader = document.querySelector('.chat-header');
+            if (chatHeader && conversationHistory.length > 0) {
+                chatHeader.style.display = 'none';
+            }
+            
+            input.value = '';
+            selectedImages = [];
+            updateImagePreview();
+            
+            // Disable input while processing
+            document.getElementById('sendBtn').disabled = true;
+            input.disabled = true;
+            
+            showTyping(true);
+
+            try {
+                let response;
+                
+                if (imagesToSend.length > 0) {
+                    // Convert base64 to blob for image
+                    const img = imagesToSend[0];
+                    const base64Data = img.data.split(',')[1];
+                    const byteCharacters = atob(base64Data);
+                    const byteNumbers = new Array(byteCharacters.length);
+                    for (let i = 0; i < byteCharacters.length; i++) {
+                        byteNumbers[i] = byteCharacters.charCodeAt(i);
+                    }
+                    const byteArray = new Uint8Array(byteNumbers);
+                    const imageBlob = new Blob([byteArray], { type: img.file.type });
+                    
+                    // Vision request with image (image as second parameter)
+                    // Note: Context doesn't work well with images, send message as-is
+                    response = await puter.ai.chat(
+                        message || "What's in this image?",
+                        imageBlob,
+                        { model: currentModel }
+                    );
+                } else {
+                    // Text-only request with conversation context
+                    // Check if volleyball match is selected - use enhanced context
+                    const isFirstMessage = conversationHistory.filter(m => m.isUser).length === 1;
+                    const contextMessage = selectedMatchData 
+                        ? buildVolleyballContext(message, isFirstMessage)
+                        : buildConversationContext(message);
+                    
+                    response = await puter.ai.chat(contextMessage, {
+                        model: currentModel
+                    });
+                }
+                
+                showTyping(false);
+                addMessage(response, null, false);
+                
+                // Auto-save after each exchange
+                saveCurrentChat();
+            } catch (error) {
+                showTyping(false);
+                addMessage('Error: ' + (error.message || JSON.stringify(error)), null, false);
+                console.error('Full error:', error);
+            }
+
+            // Re-enable input
+            document.getElementById('sendBtn').disabled = false;
+            input.disabled = false;
+            input.focus();
+        }
+
+        // Enter key to send
+        document.getElementById('messageInput').addEventListener('keydown', function(e) {
+            if (e.key === 'Enter' && !e.shiftKey) {
+                e.preventDefault();
+                sendMessage();
+            }
+        });
+
+        // Auto-resize textarea
+        document.getElementById('messageInput').addEventListener('input', function() {
+            this.style.height = 'auto';
+            this.style.height = Math.min(this.scrollHeight, 150) + 'px';
+        });
+    </script>
+</body>
+</html>
