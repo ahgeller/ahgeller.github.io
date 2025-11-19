@@ -85,6 +85,10 @@ export async function updateNeonConnectionString(): Promise<boolean> {
     
     // Reconnect to database
     await initVolleyballDB();
+    
+    // Dispatch event to notify components of database update
+    window.dispatchEvent(new Event('databaseUpdated'));
+    
     return true;
   } catch (error) {
     console.error('Error updating connection string:', error);

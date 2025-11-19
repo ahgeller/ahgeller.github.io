@@ -77,6 +77,39 @@ const MatchSelector = ({ selectedMatch, selectedFilterColumns, selectedFilterVal
     };
     
     fetchColumns();
+    
+    // Poll for database connection changes (only if not connected, stops once connected)
+    let checkInterval: NodeJS.Timeout | null = null;
+    if (!isDatabaseConnected()) {
+      checkInterval = setInterval(() => {
+        if (isDatabaseConnected()) {
+          fetchColumns();
+          if (checkInterval) clearInterval(checkInterval);
+        }
+      }, 1000); // Check every second until connected
+    }
+    
+    // Listen for database connection and table name changes
+    const handleStorageChange = (e: StorageEvent) => {
+      if (e.key === 'db_table_name' || e.key === 'neon_connection_string' || e.key === 'db_connection_string') {
+        // Re-fetch columns when table name or connection string changes
+        setTimeout(() => fetchColumns(), 100); // Small delay to ensure localStorage is updated
+      }
+    };
+    
+    // Listen for custom events when settings are saved (same window)
+    const handleDatabaseUpdate = () => {
+      setTimeout(() => fetchColumns(), 100); // Small delay to ensure database is initialized
+    };
+    
+    window.addEventListener('storage', handleStorageChange);
+    window.addEventListener('databaseUpdated', handleDatabaseUpdate);
+    
+    return () => {
+      if (checkInterval) clearInterval(checkInterval);
+      window.removeEventListener('storage', handleStorageChange);
+      window.removeEventListener('databaseUpdated', handleDatabaseUpdate);
+    };
   }, []);
   
   // Get grouped rows (distinct combinations) from SQL - these are the selectable units
@@ -966,10 +999,10 @@ const MatchSelector = ({ selectedMatch, selectedFilterColumns, selectedFilterVal
                   return isGroup && isNotDisplay && hasValue;
                 })
                 .map(col => {
-                  const value = selectedFilterValues[col];
-                  const colLabel = availableColumns.find(c => c.value === col)?.label || col;
-                  return value ? `${colLabel}=${value}` : null;
-                }).filter(Boolean).join(', ')}
+                const value = selectedFilterValues[col];
+                const colLabel = availableColumns.find(c => c.value === col)?.label || col;
+                return value ? `${colLabel}=${value}` : null;
+              }).filter(Boolean).join(', ')}
             </div>
             <div className="text-xs text-muted-foreground">
               Data loaded and ready for analysis
@@ -997,8 +1030,8 @@ const MatchSelector = ({ selectedMatch, selectedFilterColumns, selectedFilterVal
                 <div
                   key={idx}
                   className="p-2 rounded border border-border"
-                >
-                  <div className="font-medium text-sm">
+              >
+                <div className="font-medium text-sm">
                     {groupCols.map((col, i) => {
                       const colLabel = availableColumns.find(c => c.value === col)?.label || col;
                       const val = row.groupValues[col];
@@ -1022,7 +1055,7 @@ const MatchSelector = ({ selectedMatch, selectedFilterColumns, selectedFilterVal
                           </span>
                         );
                       })}
-                    </div>
+                </div>
                   )}
                 </div>
               );

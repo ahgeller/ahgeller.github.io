@@ -1,17 +1,18 @@
-import { useState, useEffect, useRef } from "react";
+import { useState, useEffect, useRef, useCallback } from "react";
 import { Button } from "@/components/ui/button";
-import { FileText, X, Upload } from "lucide-react";
+import { FileText, X, Upload, Check } from "lucide-react";
 import { getCsvFileData, getValueInfo } from "@/lib/chatApi";
-import { parseCsvText } from "@/lib/csvUtils";
-import { migrateLegacyCsvFile, saveCsvDataText } from "@/lib/csvStorage";
+import { parseCsvText, stringifyCsv } from "@/lib/csvUtils";
+import { migrateLegacyCsvFile, saveCsvDataText, getCsvDataRows, deleteCsvData } from "@/lib/csvStorage";
 import MultiSelectGroupBy from "./MultiSelectGroupBy";
 
 interface CSVSelectorProps {
-  selectedCsvId: string | null;
+  selectedCsvIds: string[]; // Changed to array for multiple CSV selection
   selectedFilterColumns: string[];
   selectedFilterValues: Record<string, string | null>;
-  onSelectCsv: (csvId: string | null, filterColumns?: string[], filterValues?: Record<string, string | null>, displayColumns?: string[], displayValues?: Record<string, string | null>) => void;
+  onSelectCsv: (csvIds: string[], filterColumns?: string[], filterValues?: Record<string, string | null>, displayColumns?: string[], displayValues?: Record<string, string | null>) => void;
   chatId?: string; // Chat ID for tracking Value Info associations
+  showGroupBy?: boolean; // Whether to show the group by section separately
 }
 
 interface CSVFile {
@@ -25,7 +26,7 @@ interface CSVFile {
 
 type ColumnMode = 'group' | 'display';
 
-const CSVSelector = ({ selectedCsvId, selectedFilterColumns, selectedFilterValues, onSelectCsv, chatId }: CSVSelectorProps) => {
+const CSVSelector = ({ selectedCsvIds, selectedFilterColumns, selectedFilterValues, onSelectCsv, chatId, showGroupBy = false }: CSVSelectorProps) => {
   const [csvFiles, setCsvFiles] = useState<CSVFile[]>([]);
   const [filteredCsvFiles, setFilteredCsvFiles] = useState<CSVFile[]>([]);
   const [isOpen, setIsOpen] = useState(false);
@@ -36,7 +37,7 @@ const CSVSelector = ({ selectedCsvId, selectedFilterColumns, selectedFilterValue
   const dropdownRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
-    const loadCsvFiles = () => {
+    const loadCsvFiles = async () => {
       const saved = localStorage.getItem("db_csv_files");
       if (saved) {
         try {
@@ -48,18 +49,35 @@ const CSVSelector = ({ selectedCsvId, selectedFilterColumns, selectedFilterValue
           }
 
           let needsSave = false;
-          const cleanedFiles = parsed
-            .map((file: CSVFile | null) => {
-              if (!file) return null;
-              const { updatedFile, migrated } = migrateLegacyCsvFile(file);
-              if (migrated) {
-                needsSave = true;
+          const cleanedFilesPromises = parsed.map(async (file: CSVFile | null) => {
+            if (!file) return null;
+            // Check if file has data but it's not in IndexedDB - try to save it
+            if (Array.isArray(file.data) && file.data.length > 0) {
+              const storageKey = `db_csv_data_${file.id}`;
+              const existingData = localStorage.getItem(storageKey);
+              if (!existingData) {
+                console.log('CSVSelector: File has data but not in storage, saving it...', file.name);
+                try {
+                  const headers = file.headers || (file.data[0] ? Object.keys(file.data[0]) : []);
+                  const csvText = stringifyCsv(headers, file.data);
+                  await saveCsvDataText(file.id, csvText, file.data);
+                  console.log('CSVSelector: Successfully saved data for', file.name);
+                } catch (e) {
+                  console.error('CSVSelector: Error saving file data:', e);
+                }
               }
-              if (!updatedFile.rowCount && Array.isArray(file.data)) {
-                updatedFile.rowCount = file.data.length;
-              }
-              return updatedFile;
-            })
+            }
+            const { updatedFile, migrated } = await migrateLegacyCsvFile(file);
+            if (migrated) {
+              needsSave = true;
+            }
+            if (!updatedFile.rowCount && Array.isArray(file.data)) {
+              updatedFile.rowCount = file.data.length;
+            }
+            return updatedFile;
+          });
+          
+          const cleanedFiles = (await Promise.all(cleanedFilesPromises))
             .filter(Boolean) as CSVFile[];
 
           if (needsSave) {
@@ -99,7 +117,7 @@ const CSVSelector = ({ selectedCsvId, selectedFilterColumns, selectedFilterValue
     if (!file) return;
 
     const reader = new FileReader();
-    reader.onload = (e) => {
+    reader.onload = async (e) => {
       const text = e.target?.result as string;
       const { headers, data } = parseCsvText(text);
 
@@ -112,16 +130,59 @@ const CSVSelector = ({ selectedCsvId, selectedFilterColumns, selectedFilterValue
       };
 
       const updatedFiles = [...csvFiles, csvFile];
+      console.log("CSVSelector: Uploading file:", csvFile.name, "Rows:", data.length, "ID:", csvFile.id);
+      
+      // First, try to save the CSV data (the larger item) to check quota
+      // This way we fail early before saving metadata
+      console.log("CSVSelector: About to save CSV data, file ID:", csvFile.id, "text length:", text.length, "data rows:", data.length);
+      try {
+        await saveCsvDataText(csvFile.id, text, data);
+        console.log("CSVSelector: saveCsvDataText returned successfully");
+      } catch (saveError) {
+        console.error("CSVSelector: Error saving CSV data:", saveError);
+        const errorMessage = saveError instanceof Error ? saveError.message : String(saveError);
+        alert(`Failed to save CSV data: ${errorMessage}. Please remove older files and try again.`);
+        return; // Don't add file to list if data save failed
+      }
+      
+      // Verify the data was saved by trying to retrieve it
+      console.log("CSVSelector: Verifying save for file ID:", csvFile.id);
+      try {
+        const verifyData = await getCsvDataRows(csvFile);
+        if (!verifyData || verifyData.length === 0) {
+          console.error("CSVSelector: Verification failed - data not found after save!");
+          alert("Warning: CSV data storage failed. Please try uploading again.");
+          return; // Don't add file to list if verification failed
+        }
+        console.log("CSVSelector: CSV data saved and verified successfully:", csvFile.name, "Rows:", data.length, "Verified rows:", verifyData.length);
+      } catch (verifyError) {
+        console.error("CSVSelector: Error verifying save:", verifyError);
+        alert("Warning: Could not verify CSV data was saved. Please try uploading again.");
+        return;
+      }
+      
+      // Now save the metadata (smaller, should succeed if data save succeeded)
       try {
         localStorage.setItem("db_csv_files", JSON.stringify(updatedFiles));
-        saveCsvDataText(csvFile.id, text, data);
-        setCsvFiles(updatedFiles);
-        setFilteredCsvFiles(updatedFiles);
-        onSelectCsv(csvFile.id);
-      } catch (error) {
-        console.error("Failed to save CSV file:", error);
-        alert("Unable to save CSV file. Storage limit may have been reached. Please remove older files and try again.");
+        console.log("CSVSelector: File metadata saved successfully");
+      } catch (metadataError) {
+        console.error("CSVSelector: Failed to save file metadata:", metadataError);
+        // Clean up the data we just saved since metadata save failed
+        try {
+          await deleteCsvData(csvFile.id);
+        } catch (deleteError) {
+          console.error("CSVSelector: Error cleaning up data:", deleteError);
+        }
+        const errorMessage = metadataError instanceof Error ? metadataError.message : "Unknown error";
+        alert(`Failed to save file metadata: ${errorMessage}. Please try again.`);
+        return; // Don't add file to list if metadata save failed
       }
+      
+      // Only update state if everything succeeded
+      setCsvFiles(updatedFiles);
+      setFilteredCsvFiles(updatedFiles);
+      // Add the new file to selected CSVs
+      onSelectCsv([...selectedCsvIds, csvFile.id]);
     };
 
     reader.readAsText(file);
@@ -130,7 +191,7 @@ const CSVSelector = ({ selectedCsvId, selectedFilterColumns, selectedFilterValue
     }
   };
 
-  const selectedFile = csvFiles.find(f => f.id === selectedCsvId);
+  const selectedFiles = csvFiles.filter(f => selectedCsvIds.includes(f.id));
   
   // Filter CSV files based on search query
   useEffect(() => {
@@ -146,22 +207,26 @@ const CSVSelector = ({ selectedCsvId, selectedFilterColumns, selectedFilterValue
     }
   }, [fileSearchQuery, csvFiles]);
   
-  // Get available columns from all CSV files combined
+  // Get available columns from selected CSV files (or all if none selected)
   const availableColumns = (() => {
-    if (csvFiles.length === 0) return [];
+    const filesToUse = selectedCsvIds.length > 0 
+      ? csvFiles.filter(f => selectedCsvIds.includes(f.id))
+      : csvFiles;
     
-    // Combine headers from all CSV files
+    if (filesToUse.length === 0) return [];
+    
+    // Combine headers from selected CSV files
     const allHeaders = new Set<string>();
-    csvFiles.forEach(file => {
+    filesToUse.forEach(file => {
       if (file.headers && Array.isArray(file.headers)) {
         file.headers.forEach(header => allHeaders.add(header));
       }
     });
     
-    // Try to get from Value Info if available (for selected file)
-    if (selectedCsvId) {
+    // Try to get from Value Info if available (for selected files)
+    selectedCsvIds.forEach(csvId => {
       try {
-        const valueInfo = getValueInfo(selectedCsvId, 'csv');
+        const valueInfo = getValueInfo(csvId, 'csv');
         if (valueInfo && valueInfo.columns) {
           valueInfo.columns.forEach((col: any) => {
             if (col.name) allHeaders.add(col.name);
@@ -170,22 +235,70 @@ const CSVSelector = ({ selectedCsvId, selectedFilterColumns, selectedFilterValue
       } catch (e) {
         // Fallback to headers
       }
-    }
+    });
     
     return Array.from(allHeaders).map(col => ({ value: col, label: col })).sort((a, b) => a.label.localeCompare(b.label));
   })();
   
-  // Get unique values from a column (from all CSV files combined)
-  const getUniqueValues = (column: string): string[] => {
-    if (csvFiles.length === 0) return [];
+  // Get unique values from a column (from selected CSV files combined)
+  // Use useCallback to ensure function updates when selectedCsvIds changes
+  const getUniqueValues = useCallback(async (column: string): Promise<string[]> => {
+    console.log('CSVSelector: getUniqueValues called for column:', column, 'selectedCsvIds:', selectedCsvIds);
+    if (csvFiles.length === 0) {
+      console.log('CSVSelector: No CSV files available');
+      return [];
+    }
     
-    // Get combined data from all CSV files
-    const csvData = getCsvFileData(null, null, null);
-    if (!csvData || csvData.length === 0) return [];
+    // If no CSVs are selected, we can't get values
+    if (selectedCsvIds.length === 0) {
+      console.log('CSVSelector: No CSVs selected, cannot get unique values. Please select CSV files first.');
+      return [];
+    }
+    
+    // Get combined data from selected CSV files
+    console.log('CSVSelector: Getting CSV data for unique values, selectedCsvIds:', selectedCsvIds);
+    let csvData = await getCsvFileData(selectedCsvIds, null, null);
+    console.log('CSVSelector: Got CSV data for unique values, rows:', csvData?.length || 0);
+    if (!csvData || csvData.length === 0) {
+      console.warn('CSVSelector: No CSV data returned. The CSV file may need to be re-uploaded.');
+      // Try to trigger migration by checking if files have data property
+      const saved = localStorage.getItem("db_csv_files");
+      if (saved) {
+        try {
+          const parsed = JSON.parse(saved);
+          const files = Array.isArray(parsed) ? parsed : [];
+          for (const id of selectedCsvIds) {
+            const file = files.find((f: any) => f.id === id);
+            if (file && Array.isArray(file.data)) {
+              console.log('CSVSelector: Found file with data property, attempting migration...');
+              const { migrateLegacyCsvFile } = await import("@/lib/csvStorage");
+              await migrateLegacyCsvFile(file);
+              // Try again after migration
+              const retryData = await getCsvFileData(selectedCsvIds, null, null);
+              if (retryData && retryData.length > 0) {
+                console.log('CSVSelector: Successfully recovered data after migration');
+                csvData = retryData;
+                break;
+              }
+            }
+          }
+        } catch (e) {
+          console.error('CSVSelector: Error attempting migration:', e);
+        }
+      }
+      if (!csvData || csvData.length === 0) {
+        return [];
+      }
+    }
     
     // Find the actual column name (case-insensitive match)
     const firstRow = csvData[0];
-    if (!firstRow) return [];
+    if (!firstRow) {
+      console.warn('CSVSelector: First row is empty');
+      return [];
+    }
+    
+    console.log('CSVSelector: Available columns in data:', Object.keys(firstRow));
     
     // Try exact match first
     let actualColumnName: string | undefined = column;
@@ -197,9 +310,12 @@ const CSVSelector = ({ selectedCsvId, selectedFilterColumns, selectedFilterValue
       
       if (!actualColumnName) {
         // Column doesn't exist at all
-        console.warn(`Column "${column}" not found in CSV data`);
+        console.warn(`CSVSelector: Column "${column}" not found in CSV data. Available columns:`, Object.keys(firstRow));
         return [];
       }
+      console.log(`CSVSelector: Column "${column}" matched to "${actualColumnName}" (case-insensitive)`);
+    } else {
+      console.log(`CSVSelector: Column "${column}" found exactly in data`);
     }
     
     const values = new Set<string>();
@@ -212,20 +328,37 @@ const CSVSelector = ({ selectedCsvId, selectedFilterColumns, selectedFilterValue
       }
     });
     
-    return Array.from(values).sort();
-  };
+    const result = Array.from(values).sort();
+    console.log(`CSVSelector: Found ${result.length} unique values for column "${column}":`, result.slice(0, 10));
+    return result;
+  }, [selectedCsvIds, csvFiles]); // Recreate when CSV selection or files change
   
   // Get first value for display indicator
-  const getFirstValue = (column: string): string | null => {
-    const uniqueValues = getUniqueValues(column);
+  // Use useCallback to ensure function updates when getUniqueValues changes
+  const getFirstValue = useCallback(async (column: string): Promise<string | null> => {
+    const uniqueValues = await getUniqueValues(column);
     return uniqueValues.length > 0 ? uniqueValues[0] : null;
-  };
+  }, [getUniqueValues]);
 
   // Get unique combinations of values from multiple columns (like pandas groupby)
   // Updated to support display columns like MatchSelector
-  const getCombinedGroupValues = (columns: string[], modesOverride?: Record<string, ColumnMode>): string[] => {
-    if (columns.length === 0) return [];
-    if (csvFiles.length === 0) return [];
+  // Use useCallback to ensure function updates when selectedCsvIds changes
+  const getCombinedGroupValues = useCallback(async (columns: string[], modesOverride?: Record<string, ColumnMode>): Promise<string[]> => {
+    console.log('CSVSelector: getCombinedGroupValues called with columns:', columns, 'selectedCsvIds:', selectedCsvIds);
+    if (columns.length === 0) {
+      console.log('CSVSelector: No columns provided');
+      return [];
+    }
+    if (csvFiles.length === 0) {
+      console.log('CSVSelector: No CSV files available');
+      return [];
+    }
+    
+    // If no CSVs are selected, we can't get values - return empty
+    if (selectedCsvIds.length === 0) {
+      console.log('CSVSelector: No CSVs selected, cannot get group values. Please select CSV files first.');
+      return [];
+    }
     
     // Use modesOverride if provided (for immediate updates), otherwise use columnModes from state
     const currentModes = modesOverride || columnModes;
@@ -243,10 +376,12 @@ const CSVSelector = ({ selectedCsvId, selectedFilterColumns, selectedFilterValue
       .filter(col => currentModes[col] === 'display')
       .filter(col => !groupOnlyColumns.includes(col));
     
-    // Get combined data from all CSV files
-    const csvData = getCsvFileData(null, null, null);
+    // Get combined data from selected CSV files
+    console.log('CSVSelector: Getting CSV data for selected IDs:', selectedCsvIds);
+    const csvData = await getCsvFileData(selectedCsvIds, null, null);
+    console.log('CSVSelector: Got CSV data, rows:', csvData?.length || 0);
     if (!csvData || csvData.length === 0) {
-      console.warn('No CSV data available for combined grouping');
+      console.warn('CSVSelector: No CSV data available for combined grouping');
       return [];
     }
     
@@ -352,10 +487,10 @@ const CSVSelector = ({ selectedCsvId, selectedFilterColumns, selectedFilterValue
       return groupOnlyColumns.map(col => entry.groupValues[col]).filter(v => v !== '').join(', ');
     }).filter(v => v !== '').sort();
     
-    console.log(`CSVSelector: Processed ${csvData.length} rows, found ${result.length} unique combinations`);
+    console.log(`CSVSelector: Processed ${csvData.length} rows, found ${result.length} unique combinations:`, result.slice(0, 5));
     
     return result;
-  };
+  }, [selectedCsvIds, csvFiles, selectedFilterColumns, columnModes]); // Recreate when dependencies change
 
 
   useEffect(() => {
@@ -441,7 +576,7 @@ const CSVSelector = ({ selectedCsvId, selectedFilterColumns, selectedFilterValue
       setGroupedRowsWithDisplay([]);
     }
     
-    onSelectCsv(selectedCsvId, groupColumns, filteredNewValues, displayColumns, displayValues);
+    onSelectCsv(selectedCsvIds, groupColumns, filteredNewValues, displayColumns, displayValues);
   };
 
   const handleValueSelect = async (column: string, value: string | null) => {
@@ -459,7 +594,7 @@ const CSVSelector = ({ selectedCsvId, selectedFilterColumns, selectedFilterValue
         }
       });
       const displayColumns = selectedFilterColumns.filter(col => columnModes[col] === 'display');
-      onSelectCsv(selectedCsvId, groupColumns, newValues, displayColumns, {});
+      onSelectCsv(selectedCsvIds, groupColumns, newValues, displayColumns, {});
       return;
     }
     
@@ -514,29 +649,37 @@ const CSVSelector = ({ selectedCsvId, selectedFilterColumns, selectedFilterValue
       }
     }
     
-    onSelectCsv(selectedCsvId, groupColumns, newValues, displayColumns, displayValues);
+    onSelectCsv(selectedCsvIds, groupColumns, newValues, displayColumns, displayValues);
     
-    // Generate valueInfo for the selected grouped data
+    // Generate valueInfo for the selected grouped data (only when values are selected, not just columns)
     const hasGroupValues = Object.keys(newValues).some(col => newValues[col] != null && groupColumns.includes(col));
-    if (hasGroupValues && groupColumns.length > 0) {
+    if (hasGroupValues && groupColumns.length > 0 && selectedCsvIds.length > 0) {
       try {
-        const { generateValueInfoFromData, saveValueInfo } = await import("@/lib/chatApi");
+        const { generateValueInfoFromData, saveValueInfo, deleteValueInfo } = await import("@/lib/chatApi");
         
-        // Get filtered CSV data
-        const csvData = getCsvFileData(null, groupColumns, newValues);
+        // Delete old current_selection for this chat to avoid stale data
+        // Note: deleteValueInfo doesn't filter by chatId, but saveValueInfo will update it
+        // We'll let saveValueInfo handle the update
+        
+        // Get filtered CSV data from selected CSVs
+        const csvData = await getCsvFileData(selectedCsvIds, groupColumns, newValues);
         if (csvData && csvData.length > 0) {
-          // Generate unique ID for this selection
-          const selectionKey = `${groupColumns.sort().join(',')}:${Object.keys(newValues).sort().map(k => `${k}=${newValues[k]}`).join(',')}`;
-          const hash = selectionKey.split('').reduce((acc, char) => {
-            const hash = ((acc << 5) - acc) + char.charCodeAt(0);
-            return hash & hash;
+          // Generate unique ID for this selection (similar to MatchSelector)
+          const groupValuesForKey = Object.keys(newValues)
+            .filter(k => newValues[k] != null && groupColumns.includes(k))
+            .sort()
+            .map(k => `${k}=${newValues[k]}`);
+          const selectionKey = `${groupColumns.sort().join(',')}:${groupValuesForKey.join(',')}`;
+          const selectionHash = selectionKey.split('').reduce((acc, char) => {
+            acc = ((acc << 5) - acc) + char.charCodeAt(0);
+            return acc & acc;
           }, 0);
-          const uniqueValueInfoId = `csv_selection_${chatId || 'global'}_${Math.abs(hash)}`;
-          const valueInfoId = `current_selection_${chatId || 'global'}`;
+          const uniqueValueInfoId = chatId ? `csv_selection_${chatId}_${Math.abs(selectionHash)}` : `csv_selection_${Math.abs(selectionHash)}`;
+          const valueInfoId = 'current_selection'; // Use same ID as MatchSelector for consistency
           
-          // Generate valueInfo name
-          const nameParts = Object.keys(newValues)
-            .filter(k => newValues[k] != null)
+          // Generate valueInfo name using only group columns and their values
+          const nameParts = groupColumns
+            .filter(col => newValues[col] != null)
             .map(col => `${col}=${newValues[col]}`);
           const valueInfoName = nameParts.length > 0 
             ? `Selected Group: ${nameParts.join(', ')}`
@@ -549,37 +692,60 @@ const CSVSelector = ({ selectedCsvId, selectedFilterColumns, selectedFilterValue
             valueInfoName
           );
           
-          if (valueInfo) {
-            valueInfo.filterColumns = groupColumns;
-            valueInfo.filterValues = Object.keys(newValues)
-              .filter(k => newValues[k] != null && groupColumns.includes(k))
-              .reduce((acc, k) => {
-                acc[k] = newValues[k];
-                return acc;
-              }, {} as Record<string, string | null>);
-            valueInfo.rowCount = csvData.length;
-            
-            const valueInfoToSave = { 
-              ...valueInfo,
-              uniqueId: uniqueValueInfoId
-            };
-            delete valueInfoToSave.data;
-            
-            saveValueInfo(valueInfoToSave, chatId);
-            
-            const currentSelectionCopy = {
-              ...valueInfoToSave,
-              id: valueInfoId,
-              uniqueId: uniqueValueInfoId,
-            };
-            saveValueInfo(currentSelectionCopy, chatId);
-            
-            console.log('CSVSelector: Saved valueInfo with', csvData.length, 'rows');
+          if (!valueInfo) {
+            console.error('CSVSelector: generateValueInfoFromData returned null - cannot save Value Info');
+            return;
           }
+          
+          // Store filter information (only group columns, not display columns)
+          valueInfo.filterColumns = groupColumns;
+          valueInfo.filterValues = Object.keys(newValues)
+            .filter(k => newValues[k] != null && groupColumns.includes(k))
+            .reduce((acc, k) => {
+              acc[k] = newValues[k];
+              return acc;
+            }, {} as Record<string, string | null>);
+          valueInfo.rowCount = csvData.length;
+          valueInfo.currentSelectionId = valueInfoId;
+          
+          // Generate a summary for display
+          if (!valueInfo.summary || valueInfo.summary.trim() === '') {
+            const columns = valueInfo.columns;
+            const columnNames = columns.map((c: any) => c.name).join(', ');
+            const totalRows = csvData.length;
+            
+            let summary = `This dataset contains ${totalRows} rows with ${columns.length} columns.\n\n`;
+            summary += `Columns: ${columnNames}\n\n`;
+            summary += `Filtered by: ${nameParts.join(', ')}`;
+            valueInfo.summary = summary;
+          }
+          
+          // Save Value Info WITHOUT data (to avoid quota issues)
+          const valueInfoToSave = { 
+            ...valueInfo,
+            uniqueId: uniqueValueInfoId
+          };
+          delete valueInfoToSave.data;
+          
+          // Save the unique Value Info (without data)
+          saveValueInfo(valueInfoToSave, chatId);
+          
+          // Also save/update current_selection directly (for active lookup - same as MatchSelector)
+          const currentSelectionCopy = {
+            ...valueInfoToSave,
+            id: valueInfoId, // Use current_selection ID for active lookup
+            uniqueId: uniqueValueInfoId, // Store reference to unique copy
+          };
+          saveValueInfo(currentSelectionCopy, chatId);
+          
+          console.log('CSVSelector: Saved valueInfo with', csvData.length, 'rows');
         }
       } catch (e) {
         console.error('Error creating Value Info for CSV:', e);
       }
+    } else if (groupColumns.length > 0 && !hasGroupValues) {
+      // If columns are selected but no values, we don't create Value Info
+      // The existing current_selection will remain until a value is selected
     }
   };
 
@@ -615,7 +781,7 @@ const CSVSelector = ({ selectedCsvId, selectedFilterColumns, selectedFilterValue
         }
       }
       
-      onSelectCsv(selectedCsvId, groupColumns, newValues, displayColumns, displayValues);
+      onSelectCsv(selectedCsvIds, groupColumns, newValues, displayColumns, displayValues);
     }
     
     // Re-query grouped values when mode changes
@@ -623,9 +789,49 @@ const CSVSelector = ({ selectedCsvId, selectedFilterColumns, selectedFilterValue
       getCombinedGroupValues(groupColumns, newModes);
     }
   };
+  
+  // Handle CSV selection toggle
+  const handleCsvToggle = (csvId: string) => {
+    if (selectedCsvIds.includes(csvId)) {
+      // Remove from selection
+      const newIds = selectedCsvIds.filter(id => id !== csvId);
+      onSelectCsv(newIds, selectedFilterColumns, selectedFilterValues);
+    } else {
+      // Add to selection
+      const newIds = [...selectedCsvIds, csvId];
+      onSelectCsv(newIds, selectedFilterColumns, selectedFilterValues);
+    }
+  };
 
+  // If showGroupBy is true, only render the group by section (for separate display in ChatMain)
+  if (showGroupBy) {
+    if (csvFiles.length === 0 || availableColumns.length === 0) {
+      return null;
+    }
+    
+    return (
+      <div className="w-full">
+        <MultiSelectGroupBy
+          availableColumns={availableColumns}
+          selectedColumns={selectedFilterColumns}
+          onColumnsChange={handleColumnsChange}
+          selectedValues={selectedFilterValues}
+          onValueSelect={handleValueSelect}
+          columnModes={columnModes}
+          onColumnModeChange={handleColumnModeChange}
+          getUniqueValues={getUniqueValues}
+          getFirstValue={getFirstValue}
+          getCombinedGroupValues={getCombinedGroupValues}
+          groupedRowsWithDisplay={groupedRowsWithDisplay}
+          placeholder="Group by..."
+        />
+      </div>
+    );
+  }
+
+  // Otherwise, render the file upload/selection UI with group by on the right
   return (
-    <div className="relative">
+    <div className="relative w-full">
       <div className="flex gap-2 items-end">
         <input
           ref={fileInputRef}
@@ -644,23 +850,6 @@ const CSVSelector = ({ selectedCsvId, selectedFilterColumns, selectedFilterValue
           <Upload className="h-4 w-4" />
         </Button>
         
-        {csvFiles.length > 0 && availableColumns.length > 0 && (
-          <MultiSelectGroupBy
-            availableColumns={availableColumns}
-            selectedColumns={selectedFilterColumns}
-            onColumnsChange={handleColumnsChange}
-            selectedValues={selectedFilterValues}
-            onValueSelect={handleValueSelect}
-            columnModes={columnModes}
-            onColumnModeChange={handleColumnModeChange}
-            getUniqueValues={getUniqueValues}
-            getFirstValue={getFirstValue}
-            getCombinedGroupValues={getCombinedGroupValues}
-            groupedRowsWithDisplay={groupedRowsWithDisplay}
-            placeholder="Group by..."
-          />
-        )}
-        
         <div className="relative flex-1">
           <Button
             variant="outline"
@@ -670,7 +859,11 @@ const CSVSelector = ({ selectedCsvId, selectedFilterColumns, selectedFilterValue
             disabled={csvFiles.length === 0}
           >
             <FileText className="h-4 w-4 mr-2" />
-            {selectedFile ? selectedFile.name : csvFiles.length === 0 ? "No CSV files" : "Select CSV"}
+            {selectedCsvIds.length > 0 
+              ? `${selectedCsvIds.length} CSV${selectedCsvIds.length > 1 ? 's' : ''} selected`
+              : csvFiles.length === 0 
+              ? "No CSV files" 
+              : "Select CSVs to combine"}
           </Button>
 
           {isOpen && (
@@ -684,14 +877,16 @@ const CSVSelector = ({ selectedCsvId, selectedFilterColumns, selectedFilterValue
                 ref={dropdownRef}
                 className="absolute top-full left-0 mt-1 w-full bg-chat-bg border border-border rounded-md shadow-lg z-20 max-h-96 overflow-hidden flex flex-col"
               >
-                {selectedCsvId && (
+                {selectedCsvIds.length > 0 && (
                   <div className="p-2 border-b border-border flex items-center justify-between">
-                    <span className="text-sm text-muted-foreground">Selected: {selectedFile?.name}</span>
+                    <span className="text-sm text-muted-foreground">
+                      {selectedCsvIds.length} CSV{selectedCsvIds.length > 1 ? 's' : ''} selected
+                    </span>
                     <Button
                       variant="ghost"
                       size="sm"
                       onClick={() => {
-                        onSelectCsv(null);
+                        onSelectCsv([], selectedFilterColumns, selectedFilterValues);
                         setIsOpen(false);
                       }}
                     >
@@ -718,35 +913,63 @@ const CSVSelector = ({ selectedCsvId, selectedFilterColumns, selectedFilterValue
                       {fileSearchQuery.trim() ? "No CSV files match your search" : "No CSV files"}
                   </div>
                 ) : (
-                    filteredCsvFiles.map((file) => (
-                  <button
-                    key={file.id}
-                    onClick={() => {
-                      onSelectCsv(file.id);
-                      setIsOpen(false);
-                          setFileSearchQuery("");
-                    }}
-                        className={`w-full text-left px-3 py-2 hover:bg-accent transition-colors ${
-                      selectedCsvId === file.id ? "bg-accent" : ""
-                    }`}
-                  >
-                        <div className="flex items-center justify-between">
-                          <div className="flex items-center flex-1 min-w-0">
-                            <FileText className="h-4 w-4 mr-2 flex-shrink-0" />
-                            <span className="text-sm truncate">{file.name}</span>
+                    filteredCsvFiles.map((file) => {
+                      const isSelected = selectedCsvIds.includes(file.id);
+                      return (
+                        <button
+                          key={file.id}
+                          onClick={() => {
+                            handleCsvToggle(file.id);
+                            setFileSearchQuery("");
+                          }}
+                          className={`w-full text-left px-3 py-2 hover:bg-accent transition-colors ${
+                            isSelected ? "bg-accent" : ""
+                          }`}
+                        >
+                          <div className="flex items-center justify-between">
+                            <div className="flex items-center flex-1 min-w-0">
+                              <div className={`w-4 h-4 border-2 rounded mr-3 flex items-center justify-center flex-shrink-0 ${
+                                isSelected ? 'bg-primary border-primary' : 'border-gray-400'
+                              }`}>
+                                {isSelected && <Check className="h-3 w-3 text-white" />}
+                              </div>
+                              <FileText className="h-4 w-4 mr-2 flex-shrink-0" />
+                              <span className="text-sm truncate">{file.name}</span>
+                            </div>
+                            <span className="text-xs text-muted-foreground ml-2 flex-shrink-0">
+                              ({(file.rowCount ?? file.data?.length ?? 0)} rows, {file.headers.length} cols)
+                            </span>
                           </div>
-                          <span className="text-xs text-muted-foreground ml-2 flex-shrink-0">
-                            ({(file.rowCount ?? file.data?.length ?? 0)} rows, {file.headers.length} cols)
-                      </span>
-                    </div>
-                  </button>
-                  ))
+                        </button>
+                      );
+                    })
                 )}
                 </div>
               </div>
             </>
           )}
         </div>
+        
+        {/* Group By on the right side */}
+        {selectedCsvIds.length > 0 && csvFiles.length > 0 && availableColumns.length > 0 && (
+          <div className="flex-1 min-w-0">
+            <MultiSelectGroupBy
+              availableColumns={availableColumns}
+              selectedColumns={selectedFilterColumns}
+              onColumnsChange={handleColumnsChange}
+              selectedValues={selectedFilterValues}
+              onValueSelect={handleValueSelect}
+              columnModes={columnModes}
+              onColumnModeChange={handleColumnModeChange}
+              getUniqueValues={getUniqueValues}
+              getFirstValue={getFirstValue}
+              getCombinedGroupValues={getCombinedGroupValues}
+              groupedRowsWithDisplay={groupedRowsWithDisplay}
+              placeholder="Group by..."
+              dataSourceKey={selectedCsvIds.join(',')} // Key that changes when CSV selection changes
+            />
+          </div>
+        )}
       </div>
     </div>
   );

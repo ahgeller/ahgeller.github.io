@@ -152,8 +152,8 @@ const ChatSidebar = ({
                               className="text-sm font-medium text-foreground truncate cursor-text"
                               onDoubleClick={(e) => handleDoubleClick(chat, e)}
                             >
-                              {chat.title}
-                            </p>
+                            {chat.title}
+                          </p>
                           )}
                           <div className="flex items-center gap-2">
                             <p className="text-xs text-muted-foreground">

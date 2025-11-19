@@ -4,7 +4,7 @@ import { Input } from "@/components/ui/input";
 import { Button } from "@/components/ui/button";
 import { Textarea } from "@/components/ui/textarea";
 import { X, Plus, Trash2, Upload, FileText, RotateCcw } from "lucide-react";
-import { cleanConnectionString } from "@/lib/database";
+import { cleanConnectionString, initVolleyballDB } from "@/lib/database";
 import { parseCsvText } from "@/lib/csvUtils";
 import { migrateLegacyCsvFile, saveCsvDataText, deleteCsvData } from "@/lib/csvStorage";
 import { deleteValueInfo, clearAllValueInfos, removeDuplicateValueInfos } from "@/lib/chatApi";
@@ -330,23 +330,27 @@ Always query ALL rows - never sample or estimate.`;
           const parsed = JSON.parse(savedCsvFiles);
           if (Array.isArray(parsed)) {
             let needsSave = false;
-            const cleanedFiles = parsed
-              .map((file: CSVFile | null) => {
-                if (!file) return null;
-                const { updatedFile, migrated } = migrateLegacyCsvFile(file);
-                if (migrated) needsSave = true;
-                if (!updatedFile.rowCount && Array.isArray(file.data)) {
-                  updatedFile.rowCount = file.data.length;
-                }
-                return updatedFile;
-              })
-              .filter(Boolean) as CSVFile[];
-
-            if (needsSave) {
-              localStorage.setItem("db_csv_files", JSON.stringify(cleanedFiles));
-            }
-
-            setCsvFiles(cleanedFiles);
+            const cleanedFilesPromises = parsed.map(async (file: CSVFile | null) => {
+              if (!file) return null;
+              const { updatedFile, migrated } = await migrateLegacyCsvFile(file);
+              if (migrated) needsSave = true;
+              if (!updatedFile.rowCount && Array.isArray(file.data)) {
+                updatedFile.rowCount = file.data.length;
+              }
+              return updatedFile;
+            });
+            Promise.all(cleanedFilesPromises).then(cleanedFiles => {
+              const filtered = cleanedFiles.filter(Boolean) as CSVFile[];
+              if (needsSave) {
+                localStorage.setItem("db_csv_files", JSON.stringify(filtered));
+              }
+              setCsvFiles(filtered);
+            }).catch(e => {
+              console.error("Error migrating CSV files:", e);
+              // Fallback to non-migrated files
+              const filtered = parsed.filter((f: any) => f !== null) as CSVFile[];
+              setCsvFiles(filtered);
+            });
           } else {
             setCsvFiles([]);
           }
@@ -396,12 +400,29 @@ Always query ALL rows - never sample or estimate.`;
     return () => clearInterval(interval);
   }, [isOpen]);
 
-  const handleSaveConnectionString = () => {
+  const handleSaveConnectionString = async () => {
     try {
       const cleaned = connectionString.trim() ? cleanConnectionString(connectionString) : "";
       localStorage.setItem("db_connection_string", cleaned);
       localStorage.setItem("neon_connection_string", cleaned); // Also save to old key
       setConnectionString(cleaned);
+      
+      // Initialize database connection if connection string is provided
+      if (cleaned) {
+        try {
+          await initVolleyballDB();
+          // Dispatch event to notify components of database update
+          window.dispatchEvent(new Event('databaseUpdated'));
+        } catch (dbError) {
+          console.error('Error initializing database:', dbError);
+          alert("Connection string saved, but database initialization failed. Please check your connection string.");
+          return;
+        }
+      } else {
+        // If connection string is cleared, dispatch event to notify components
+        window.dispatchEvent(new Event('databaseUpdated'));
+      }
+      
       alert("Connection string saved successfully!");
     } catch (error) {
       alert(`Error saving connection string: ${error instanceof Error ? error.message : "Unknown error"}`);
@@ -410,6 +431,8 @@ Always query ALL rows - never sample or estimate.`;
 
   const handleSaveTableName = () => {
     localStorage.setItem("db_table_name", tableName.trim());
+    // Dispatch event to notify components of database update
+    window.dispatchEvent(new Event('databaseUpdated'));
     alert("Table name saved successfully!");
   };
 
@@ -585,7 +608,7 @@ Always query ALL rows - never sample or estimate.`;
     if (!file) return;
 
     const reader = new FileReader();
-    reader.onload = (e) => {
+    reader.onload = async (e) => {
       const text = e.target?.result as string;
       const { headers, data } = parseCsvText(text);
 
@@ -600,7 +623,7 @@ Always query ALL rows - never sample or estimate.`;
       const updatedFiles = [...csvFiles, csvFile];
       try {
         localStorage.setItem("db_csv_files", JSON.stringify(updatedFiles));
-        saveCsvDataText(csvFile.id, text, data);
+        await saveCsvDataText(csvFile.id, text, data);
         setCsvFiles(updatedFiles);
         alert(`CSV file "${file.name}" uploaded successfully! ${data.length} rows loaded.`);
       } catch (error) {
@@ -615,12 +638,12 @@ Always query ALL rows - never sample or estimate.`;
     }
   };
 
-  const handleDeleteCsvFile = (fileId: string) => {
+  const handleDeleteCsvFile = async (fileId: string) => {
     if (confirm("Delete this CSV file?")) {
       const updatedFiles = csvFiles.filter(f => f.id !== fileId);
       setCsvFiles(updatedFiles);
       localStorage.setItem("db_csv_files", JSON.stringify(updatedFiles));
-      deleteCsvData(fileId);
+      await deleteCsvData(fileId);
     }
   };
 

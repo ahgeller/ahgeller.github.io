@@ -139,7 +139,7 @@ async function callOpenRouterApi(options: ApiCallOptions) {
       } else if (modelLower.includes('coder')) {
         // Generic code models: limit to 100k output tokens (leaving ~162k for input)
         // This ensures we stay under typical 262k total context limit
-        maxTokens = 100000;
+      maxTokens = 100000;
       }
     }
     

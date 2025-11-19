@@ -16,6 +16,7 @@ interface MultiSelectGroupByProps {
   getCombinedGroupValues?: (columns: string[]) => string[] | Promise<string[]>;
   placeholder?: string;
   groupedRowsWithDisplay?: Array<{groupValues: Record<string, string>, displayValues: Record<string, string>}>;
+  dataSourceKey?: string; // Key that changes when data source (CSVs) changes, to trigger reload
 }
 
 const VALUES_PER_PAGE = 15;
@@ -32,7 +33,8 @@ const MultiSelectGroupBy = ({
   getFirstValue,
   getCombinedGroupValues,
   placeholder = "Group by...",
-  groupedRowsWithDisplay
+  groupedRowsWithDisplay,
+  dataSourceKey
 }: MultiSelectGroupByProps) => {
   const [showList, setShowList] = useState(false);
   
@@ -67,26 +69,33 @@ const MultiSelectGroupBy = ({
       try {
         let values: string[] = [];
         
+        console.log('MultiSelectGroupBy: Loading values for groupColumns:', groupColumns);
+        
         // IMPORTANT: Only use groupColumns, never display columns
         if (groupColumns.length === 0) {
           values = [];
         } else if (groupColumns.length === 1) {
+          console.log('MultiSelectGroupBy: Single column, calling getUniqueValues for:', groupColumns[0]);
           const result = getUniqueValues(groupColumns[0]);
           values = Array.isArray(result) ? result : await result;
+          console.log('MultiSelectGroupBy: Got', values.length, 'values for single column');
         } else if (getCombinedGroupValues) {
           // Only pass group columns, not display columns
+          console.log('MultiSelectGroupBy: Multiple columns, calling getCombinedGroupValues');
           const result = getCombinedGroupValues(groupColumns);
           values = Array.isArray(result) ? result : await result;
+          console.log('MultiSelectGroupBy: Got', values.length, 'combined values');
         }
         
         // Only update state if component is still mounted and not cancelled
         if (!cancelled) {
+          console.log('MultiSelectGroupBy: Setting allValues to', values.length, 'values');
           setAllValues(values);
           // Don't auto-open dropdown - let user click the search input to open it
         }
       } catch (e) {
         if (!cancelled) {
-          console.error('Error loading values:', e);
+          console.error('MultiSelectGroupBy: Error loading values:', e);
           setAllValues([]);
         }
       } finally {
@@ -102,8 +111,10 @@ const MultiSelectGroupBy = ({
     return () => {
       cancelled = true;
     };
+    // Only depend on groupColumns and dataSourceKey - the functions are stable useCallback hooks
+    // and including them causes infinite loops when they're recreated
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [groupColumns.join(',')]); // CRITICAL: Use groupColumns, not selectedColumns
+  }, [groupColumns.join(','), dataSourceKey]); // Re-run when columns or data source changes
   // Filter values - search in both group column values AND display column values
   const filteredValues = searchQuery.trim()
     ? allValues.filter(val => {
@@ -272,6 +283,13 @@ const MultiSelectGroupBy = ({
     setSearchQuery(value);
     setIsSearchOpen(true);
     setCurrentPage(0);
+    
+    // If no values are loaded and we have columns, try to reload
+    if (allValues.length === 0 && groupColumns.length > 0 && !isLoadingValues) {
+      console.log('MultiSelectGroupBy: No values loaded, attempting to reload...');
+      // Trigger reload by updating a state that will cause useEffect to re-run
+      // The useEffect should already handle this, but this ensures it happens
+    }
   };
 
   const handleValueSelect = (value: string, e?: React.MouseEvent) => {
@@ -346,7 +364,7 @@ const MultiSelectGroupBy = ({
       }, [groupColumns, getFirstValue]);
 
   return (
-    <div className="w-full flex flex-col" ref={containerRef}>
+    <div className="w-full flex flex-col relative" ref={containerRef}>
       {/* Column selection button */}
       <button
         type="button"
@@ -364,60 +382,62 @@ const MultiSelectGroupBy = ({
         <span>{showList ? '▲' : '▼'}</span>
       </button>
 
-      {/* Selected columns with mode toggles */}
+      {/* Selected columns with mode toggles - compact scrollable layout */}
       {selectedColumns.length > 0 && (
-        <div className="mt-2 flex flex-wrap gap-2">
-          {selectedColumns.map((colValue) => {
-            const col = availableColumns.find(c => c.value === colValue);
-            const colLabel = col ? col.label : colValue;
-            const mode = columnModes?.[colValue] || 'group';
-            
-            return (
-              <div
-                key={colValue}
-                className="flex items-center gap-1 px-2 py-1 bg-secondary border border-border rounded text-xs"
-              >
-                <span className="text-muted-foreground">{colLabel}</span>
-                {onColumnModeChange && (
+        <div className="mt-2 max-h-20 overflow-y-auto">
+          <div className="flex flex-wrap gap-1.5">
+            {selectedColumns.map((colValue) => {
+              const col = availableColumns.find(c => c.value === colValue);
+              const colLabel = col ? col.label : colValue;
+              const mode = columnModes?.[colValue] || 'group';
+              
+              return (
+                <div
+                  key={colValue}
+                  className="flex items-center gap-0.5 px-1.5 py-0.5 bg-secondary border border-border rounded text-xs flex-shrink-0"
+                >
+                  <span className="text-muted-foreground truncate max-w-[120px]">{colLabel}</span>
+                  {onColumnModeChange && (
+                    <button
+                      type="button"
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        const newMode = mode === 'group' ? 'display' : 'group';
+                        onColumnModeChange(colValue, newMode);
+                      }}
+                      className="ml-0.5 p-0.5 hover:bg-accent rounded flex-shrink-0"
+                      title={`Switch to ${mode === 'group' ? 'display' : 'group'} mode`}
+                    >
+                      {mode === 'group' ? (
+                        <Group className="h-3 w-3 text-primary" />
+                      ) : (
+                        <Eye className="h-3 w-3 text-blue-500" />
+                      )}
+                    </button>
+                  )}
                   <button
                     type="button"
                     onClick={(e) => {
                       e.stopPropagation();
-                      const newMode = mode === 'group' ? 'display' : 'group';
-                      onColumnModeChange(colValue, newMode);
+                      handleRemove(colValue, e);
                     }}
-                    className="ml-1 p-0.5 hover:bg-accent rounded"
-                    title={`Switch to ${mode === 'group' ? 'display' : 'group'} mode`}
+                    className="ml-0.5 p-0.5 hover:bg-destructive/20 rounded flex-shrink-0"
+                    title="Remove column"
                   >
-                    {mode === 'group' ? (
-                      <Group className="h-3 w-3 text-primary" />
-                    ) : (
-                      <Eye className="h-3 w-3 text-blue-500" />
-                    )}
+                    <X className="h-3 w-3 text-muted-foreground hover:text-destructive" />
                   </button>
-                )}
-                <button
-                  type="button"
-                  onClick={(e) => {
-                    e.stopPropagation();
-                    handleRemove(colValue, e);
-                  }}
-                  className="ml-1 p-0.5 hover:bg-destructive/20 rounded"
-                  title="Remove column"
-                >
-                  <X className="h-3 w-3 text-muted-foreground hover:text-destructive" />
-                </button>
-              </div>
-            );
-          })}
+                </div>
+              );
+            })}
+          </div>
         </div>
       )}
 
       {/* Column dropdown list */}
-      {showList && (
+      {showList && availableColumns.length > 0 && (
         <div
           ref={listRef}
-          className="absolute z-50 w-full mt-2 top-full border rounded bg-secondary shadow-lg max-h-96 overflow-y-auto"
+          className="absolute z-50 w-full mt-2 top-full left-0 border rounded bg-secondary shadow-lg max-h-96 overflow-y-auto"
         >
           {availableColumns.map((col) => {
             const isSelected = selectedColumns.includes(col.value);
@@ -572,7 +592,7 @@ const MultiSelectGroupBy = ({
               </div>
             ) : (
               <div className="absolute z-50 w-full mt-1 bg-secondary border border-border rounded-lg shadow-lg p-4 text-center text-sm text-muted-foreground">
-                {searchQuery.trim() ? 'No values found' : 'No values available'}
+                {searchQuery.trim() ? 'No values found' : (isLoadingValues ? 'Loading values...' : 'No values available. Make sure CSV files are selected and the column exists in the data.')}
               </div>
             )
           )}

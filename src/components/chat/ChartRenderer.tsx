@@ -171,27 +171,27 @@ function processChartData(data: any, chartComponents: JSX.Element[], keyPrefix: 
         
         const labels = data.labels || [];
         const yLabel = labels[1] || labels[0] || 'Value';
-        
-        chartComponents.push(
-          <div key={`${keyPrefix}-bar-${chartComponents.length}`} className="my-4 p-4 bg-black/20 rounded-lg w-full">
-            <h3 className="text-lg font-semibold mb-3">
+      
+      chartComponents.push(
+        <div key={`${keyPrefix}-bar-${chartComponents.length}`} className="my-4 p-4 bg-black/20 rounded-lg w-full">
+          <h3 className="text-lg font-semibold mb-3">
               {keyPrefix || data.title || 'Bar Chart'}
-            </h3>
-            <div style={{ width: '100%', height: '400px', minWidth: '300px' }}>
-              <ResponsiveContainer width="100%" height="100%">
-                <BarChart data={chartData} layout="vertical">
-                  <CartesianGrid strokeDasharray="3 3" />
-                  <XAxis type="number" />
-                  <YAxis dataKey="label" type="category" width={150} />
+          </h3>
+          <div style={{ width: '100%', height: '400px', minWidth: '300px' }}>
+            <ResponsiveContainer width="100%" height="100%">
+            <BarChart data={chartData} layout="vertical">
+              <CartesianGrid strokeDasharray="3 3" />
+              <XAxis type="number" />
+              <YAxis dataKey="label" type="category" width={150} />
                   <Tooltip />
-                  <Legend />
+              <Legend />
                   <Bar dataKey="value" fill="#8884d8" name={yLabel} />
-                </BarChart>
-              </ResponsiveContainer>
-            </div>
+            </BarChart>
+          </ResponsiveContainer>
           </div>
-        );
-        return;
+        </div>
+      );
+      return;
       } else {
         // Line chart: x_series contains numeric values, multiple y series
         const chartData = xSeries.map((x: any, idx: number) => {
@@ -800,7 +800,7 @@ export function ChartRenderer({ content, executionResults }: ChartRendererProps)
               // Already processed, skip
             } else {
               seenCharts.add(duplicateKey);
-              processChartData(data, chartComponents, 'execution', seenCharts);
+          processChartData(data, chartComponents, 'execution', seenCharts);
             }
           } else {
             // Fallback to old method for non-nested data
@@ -889,7 +889,7 @@ export function ChartRenderer({ content, executionResults }: ChartRendererProps)
                   continue; // Skip if already processed from this pattern
                 }
                 seenCharts.add(execContentKey);
-                processChartData(data, chartComponents, 'execution-content', seenCharts);
+              processChartData(data, chartComponents, 'execution-content', seenCharts);
               } else {
                 // Fallback to old method
                 const dataHash = JSON.stringify(data).substring(0, 200);

@@ -698,8 +698,9 @@ If you need to understand column types, inspect csvData[0] to see sample values.
   return context;
 }
 
-// Get CSV file data by ID with optional filtering
-export function getCsvFileData(csvId: string | null, filterColumns?: string[] | null, filterValues?: Record<string, string | null> | null): any[] | null {
+// Get CSV file data by ID(s) with optional filtering
+// csvId can be a single string, array of strings, or null
+export async function getCsvFileData(csvId: string | string[] | null, filterColumns?: string[] | null, filterValues?: Record<string, string | null> | null): Promise<any[] | null> {
   try {
     const saved = localStorage.getItem("db_csv_files");
     if (!saved) return null;
@@ -707,23 +708,78 @@ export function getCsvFileData(csvId: string | null, filterColumns?: string[] | 
     const parsed = JSON.parse(saved);
     const files = Array.isArray(parsed) ? parsed : [];
     
-    // If csvId is provided, get that specific file; otherwise combine all files
+    // If csvId is provided, get that specific file(s); otherwise combine all files
     let dataToFilter: any[] = [];
     
     if (csvId) {
-      const file = files.find((f: any) => f.id === csvId);
-      if (!file) return null;
-      const rows = getCsvDataRows(file);
-      if (!rows || rows.length === 0) return null;
-      dataToFilter = rows;
-    } else {
-      files.forEach((file: any) => {
-        if (!file) return;
-        const rows = getCsvDataRows(file);
-        if (rows && rows.length > 0) {
-          dataToFilter = dataToFilter.concat(rows);
+      // Handle array of CSV IDs
+      const csvIds = Array.isArray(csvId) ? csvId : [csvId];
+      console.log('getCsvFileData: Looking for CSV IDs:', csvIds, 'Total files:', files.length);
+      
+      // Process files in parallel
+      const filePromises = csvIds.map(async (id) => {
+        const file = files.find((f: any) => f.id === id);
+        if (file) {
+          console.log('getCsvFileData: Found file:', file.name, 'id:', file.id);
+          // First check if file has embedded data that needs to be saved
+          if (Array.isArray(file.data) && file.data.length > 0) {
+            console.log('getCsvFileData: File has embedded data, rows:', file.data.length, 'Attempting to save...');
+            try {
+              const { saveCsvDataText } = await import("@/lib/csvStorage");
+              const { stringifyCsv } = await import("@/lib/csvUtils");
+              const headers = file.headers || (file.data[0] ? Object.keys(file.data[0]) : []);
+              const csvText = stringifyCsv(headers, file.data);
+              await saveCsvDataText(file.id, csvText, file.data);
+              console.log('getCsvFileData: Successfully saved embedded data to IndexedDB');
+            } catch (e) {
+              console.error('getCsvFileData: Error saving embedded data:', e);
+            }
+            // Use embedded data directly
+            console.log('getCsvFileData: Using embedded file.data directly, rows:', file.data.length);
+            return file.data;
+          } else {
+            // Try to get data from IndexedDB
+            const rows = await getCsvDataRows(file);
+            console.log('getCsvFileData: Retrieved rows for', file.name, ':', rows?.length || 0);
+            if (rows && rows.length > 0) {
+              return rows;
+            } else {
+              console.warn('getCsvFileData: No rows returned for file:', file.name, 'id:', file.id);
+              console.warn('getCsvFileData: File object keys:', Object.keys(file));
+              console.warn('getCsvFileData: File has data property?', 'data' in file, 'Type:', typeof file.data);
+              return null;
+            }
+          }
+        } else {
+          console.warn('getCsvFileData: File not found for ID:', id, 'Available IDs:', files.map((f: any) => f.id));
+          return null;
         }
       });
+      
+      const fileDataArrays = await Promise.all(filePromises);
+      fileDataArrays.forEach(data => {
+        if (data && data.length > 0) {
+          dataToFilter = dataToFilter.concat(data);
+        }
+      });
+      
+      console.log('getCsvFileData: Total rows collected:', dataToFilter.length);
+      if (dataToFilter.length === 0) return null;
+    } else {
+      // Combine all files if no specific IDs provided
+      const filePromises = files.map(async (file: any) => {
+        if (!file) return null;
+        const rows = await getCsvDataRows(file);
+        return rows && rows.length > 0 ? rows : null;
+      });
+      
+      const fileDataArrays = await Promise.all(filePromises);
+      fileDataArrays.forEach(data => {
+        if (data && data.length > 0) {
+          dataToFilter = dataToFilter.concat(data);
+        }
+      });
+      
       if (dataToFilter.length === 0) return null;
     }
     
@@ -1411,7 +1467,7 @@ export async function sendChatMessage(
     } else {
       // Text-only request
       // Get CSV data if csvId is provided (with optional filtering)
-      const csvData = getCsvFileData(csvId, csvFilterColumns, csvFilterValues);
+      const csvData = await getCsvFileData(csvId, csvFilterColumns, csvFilterValues);
       const csvFileName = csvId ? (() => {
         try {
           const saved = localStorage.getItem("db_csv_files");

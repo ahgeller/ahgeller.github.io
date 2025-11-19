@@ -20,27 +20,43 @@ const CSVValueSearch = ({ csvId = null, filterColumn, onSelectValue }: CSVValueS
   const dropdownRef = useRef<HTMLDivElement>(null);
   const containerRef = useRef<HTMLDivElement>(null);
 
+  const [uniqueValues, setUniqueValues] = useState<string[]>([]);
+  const [isLoading, setIsLoading] = useState(true);
+
   // Get unique values from the selected column (combines all CSV files if csvId is null)
-  const getUniqueValues = (): string[] => {
-    const csvData = getCsvFileData(csvId, null, null); // Combines all files if csvId is null
-    if (!csvData || csvData.length === 0) return [];
-    
-    const values = new Set<string>();
-    csvData.forEach((row: any) => {
-      if (row && row[filterColumn] !== null && row[filterColumn] !== undefined && row[filterColumn] !== '') {
-        values.add(String(row[filterColumn]));
+  useEffect(() => {
+    const loadValues = async () => {
+      setIsLoading(true);
+      try {
+        const csvData = await getCsvFileData(csvId, null, null); // Combines all files if csvId is null
+        if (!csvData || csvData.length === 0) {
+          setUniqueValues([]);
+          setIsLoading(false);
+          return;
+        }
+        
+        const values = new Set<string>();
+        csvData.forEach((row: any) => {
+          if (row && row[filterColumn] !== null && row[filterColumn] !== undefined && row[filterColumn] !== '') {
+            values.add(String(row[filterColumn]));
+          }
+        });
+        setUniqueValues(Array.from(values).sort());
+      } catch (error) {
+        console.error('Error loading CSV values:', error);
+        setUniqueValues([]);
+      } finally {
+        setIsLoading(false);
       }
-    });
-    return Array.from(values).sort();
-  };
+    };
+    
+    loadValues();
+  }, [csvId, filterColumn]);
 
   // Get first value for display indicator
   const getFirstValue = (): string | null => {
-    const uniqueValues = getUniqueValues();
     return uniqueValues.length > 0 ? uniqueValues[0] : null;
   };
-
-  const uniqueValues = getUniqueValues();
   
   // Filter unique values based on search query
   const filteredValues = searchQuery.trim()

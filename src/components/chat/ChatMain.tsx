@@ -6,7 +6,7 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@
 import { useToast } from "@/hooks/use-toast";
 import { Chat, Message, MatchData } from "@/types/chat";
 import { sendChatMessage, DEFAULT_MODEL, getValueInfo, autoInspectData, getCsvFileData } from "@/lib/chatApi";
-import { loadMatchData } from "@/lib/database";
+import { loadMatchData, isDatabaseConnected } from "@/lib/database";
 import ChatMessage from "./ChatMessage";
 import MatchSelector from "./MatchSelector";
 import CSVSelector from "./CSVSelector";
@@ -32,7 +32,7 @@ interface ChatMainProps {
       csvFilterValues?: Record<string, string | null>;
       csvDisplayColumns?: string[];
       csvDisplayValues?: Record<string, string | null>;
-      selectedCsvId?: string | null;
+      selectedCsvIds?: string[];
       selectedContextSectionId?: string | null;
     }
   ) => void;
@@ -55,7 +55,7 @@ const ChatMain = ({
   const [isLoading, setIsLoading] = useState(false);
   const [selectedImages, setSelectedImages] = useState<string[]>([]);
   const [matchData, setMatchData] = useState<MatchData | null>(null);
-  const [selectedCsvId, setSelectedCsvId] = useState<string | null>(null);
+  const [selectedCsvIds, setSelectedCsvIds] = useState<string[]>([]);
   const [csvFilterColumns, setCsvFilterColumns] = useState<string[]>([]);
   const [csvFilterValues, setCsvFilterValues] = useState<Record<string, string | null>>({});
   const [csvDisplayColumns, setCsvDisplayColumns] = useState<string[]>([]);
@@ -66,6 +66,75 @@ const ChatMain = ({
   const [matchDisplayValues, setMatchDisplayValues] = useState<Record<string, string | null>>({});
   const [selectedContextSectionId, setSelectedContextSectionId] = useState<string | null>("none");
   const [contextSections, setContextSections] = useState<Array<{id: string, title: string, content: string}>>([]);
+  const [dbConnected, setDbConnected] = useState(false);
+  const [hasCsvFiles, setHasCsvFiles] = useState(false);
+  
+  // Check for CSV files and listen for changes
+  useEffect(() => {
+    const checkCsvFiles = () => {
+      try {
+        const saved = localStorage.getItem("db_csv_files");
+        if (saved) {
+          const parsed = JSON.parse(saved);
+          const files = Array.isArray(parsed) ? parsed : [];
+          // Check if any files have headers (columns available)
+          const hasColumns = files.some((f: any) => f.headers && Array.isArray(f.headers) && f.headers.length > 0);
+          setHasCsvFiles(files.length > 0 && hasColumns);
+        } else {
+          setHasCsvFiles(false);
+        }
+      } catch (e) {
+        setHasCsvFiles(false);
+      }
+    };
+    
+    checkCsvFiles();
+    
+    // Listen for storage changes
+    const handleStorageChange = (e: StorageEvent) => {
+      if (e.key === 'db_csv_files') {
+        checkCsvFiles();
+      }
+    };
+    
+    window.addEventListener('storage', handleStorageChange);
+    const interval = setInterval(checkCsvFiles, 1000);
+    
+    return () => {
+      window.removeEventListener('storage', handleStorageChange);
+      clearInterval(interval);
+    };
+  }, []);
+  
+  // Check database connection status and listen for changes
+  useEffect(() => {
+    const checkConnection = () => {
+      setDbConnected(isDatabaseConnected());
+    };
+    
+    // Initial check
+    checkConnection();
+    
+    // Listen for database updates
+    const handleDatabaseUpdate = () => {
+      // Small delay to ensure database is initialized
+      setTimeout(checkConnection, 200);
+    };
+    
+    window.addEventListener('databaseUpdated', handleDatabaseUpdate);
+    
+    // Also poll periodically if not connected (to catch async initialization)
+    const interval = setInterval(() => {
+      if (!dbConnected) {
+        checkConnection();
+      }
+    }, 1000);
+    
+    return () => {
+      window.removeEventListener('databaseUpdated', handleDatabaseUpdate);
+      clearInterval(interval);
+    };
+  }, [dbConnected]);
   
   // Load context sections from localStorage
   useEffect(() => {
@@ -132,7 +201,7 @@ const ChatMain = ({
       setCsvFilterValues(chat.csvFilterValues || {});
       setCsvDisplayColumns(chat.csvDisplayColumns || []);
       setCsvDisplayValues(chat.csvDisplayValues || {});
-      setSelectedCsvId(chat.selectedCsvId || null);
+      setSelectedCsvIds(chat.selectedCsvIds || []);
       setSelectedContextSectionId(chat.selectedContextSectionId !== undefined ? chat.selectedContextSectionId : "none");
     } else {
       // Reset when no chat is selected
@@ -144,7 +213,7 @@ const ChatMain = ({
       setCsvFilterValues({});
       setCsvDisplayColumns([]);
       setCsvDisplayValues({});
-      setSelectedCsvId(null);
+      setSelectedCsvIds([]);
       setSelectedContextSectionId("none");
     }
   }, [chat?.id]);
@@ -161,15 +230,22 @@ const ChatMain = ({
   const supportsReasoning = currentModel.includes('sherlock-think') || currentModel.includes('think') || currentModel.includes('deepseek-r1');
   const reasoningEnabled = chat?.reasoningEnabled ?? true; // Default to true for new chats
   
-  // Check if current_selection exists (grouped data selection)
+  // Check if current_selection exists (grouped data selection) - for both match and CSV
   const [hasCurrentSelection, setHasCurrentSelection] = useState(false);
   const [currentSelectionValueInfo, setCurrentSelectionValueInfo] = useState<any | null>(null);
   useEffect(() => {
     const checkCurrentSelection = () => {
-      // Only check if we have filter selections for this chat (indicates user has selected something)
-      const hasFilterSelection = matchFilterColumns.length > 0 && Object.keys(matchFilterValues).some(col => matchFilterValues[col] !== null);
+      // Check for match filter selections
+      const hasMatchFilterSelection = matchFilterColumns.length > 0 && Object.keys(matchFilterValues).some(col => matchFilterValues[col] !== null);
+      // Check for CSV filter selections
+      const hasCsvFilterSelection = csvFilterColumns.length > 0 && Object.keys(csvFilterValues).some(col => csvFilterValues[col] !== null);
       
-      if (!hasFilterSelection) {
+      // Determine which type to check (match takes precedence if both exist)
+      const typeToCheck = hasMatchFilterSelection ? 'match' : (hasCsvFilterSelection ? 'csv' : null);
+      const filterColumns = hasMatchFilterSelection ? matchFilterColumns : csvFilterColumns;
+      const filterValues = hasMatchFilterSelection ? matchFilterValues : csvFilterValues;
+      
+      if (!typeToCheck || filterColumns.length === 0) {
         // No filter selection means no current_selection for this chat
         setHasCurrentSelection(false);
         setCurrentSelectionValueInfo(null);
@@ -177,7 +253,7 @@ const ChatMain = ({
       }
       
       // Pass chatId to getValueInfo so it can find the correct current_selection for this chat
-      const currentSelection = getValueInfo('current_selection', 'match', chat?.id);
+      const currentSelection = getValueInfo('current_selection', typeToCheck, chat?.id);
       
       // Verify this selection belongs to the current chat (check chatId or usedByChats)
       const belongsToCurrentChat = !chat?.id || 
@@ -190,7 +266,7 @@ const ChatMain = ({
       let matchesCurrentSelection = false;
       if (currentSelection && belongsToCurrentChat) {
         // Get current group columns (columns with values)
-        const currentGroupColumns = matchFilterColumns.filter(col => matchFilterValues[col] != null).sort();
+        const currentGroupColumns = filterColumns.filter(col => filterValues[col] != null).sort();
         const storedGroupColumns = (currentSelection.filterColumns || []).sort();
         
         // Check if columns match
@@ -198,7 +274,7 @@ const ChatMain = ({
             currentGroupColumns.every((col, idx) => col === storedGroupColumns[idx])) {
           // Check if values match
           matchesCurrentSelection = currentGroupColumns.every(col => 
-            currentSelection.filterValues?.[col] === matchFilterValues[col]
+            currentSelection.filterValues?.[col] === filterValues[col]
           );
         }
       }
@@ -215,10 +291,11 @@ const ChatMain = ({
     // Check more frequently to catch changes and keep banner visible
     const interval = setInterval(checkCurrentSelection, 500);
     return () => clearInterval(interval);
-  }, [matchFilterColumns, matchFilterValues, chat?.id]);
+  }, [matchFilterColumns, matchFilterValues, csvFilterColumns, csvFilterValues, chat?.id]);
   
   // Check if user has made filter selections (even if Value Info hasn't been created yet)
-  const hasFilterSelections = matchFilterColumns.length > 0 && Object.keys(matchFilterValues).some(col => matchFilterValues[col] !== null);
+  const hasFilterSelections = (matchFilterColumns.length > 0 && Object.keys(matchFilterValues).some(col => matchFilterValues[col] !== null)) ||
+                              (csvFilterColumns.length > 0 && Object.keys(csvFilterValues).some(col => csvFilterValues[col] !== null));
   
   // Enable volleyball context if match data is loaded OR if grouped data is selected
   // IMPORTANT: hasCurrentSelection already verifies the Value Info belongs to the current chat
@@ -356,28 +433,8 @@ const ChatMain = ({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [chat?.selectedMatch]);
 
-  // Auto-inspect CSV data when selected (use unfiltered data for inspection)
-  useEffect(() => {
-    if (selectedCsvId) {
-      const csvData = getCsvFileData(selectedCsvId, null, null); // Use unfiltered for inspection
-      if (csvData && csvData.length > 0) {
-        // Get CSV file name
-        try {
-          const saved = localStorage.getItem("db_csv_files");
-          if (saved) {
-            const parsed = JSON.parse(saved);
-            const files = Array.isArray(parsed) ? parsed : [];
-            const file = files.find((f: any) => f.id === selectedCsvId);
-            if (file) {
-              autoInspectData(csvData, selectedCsvId, 'csv', file.name, chat?.id);
-            }
-          }
-        } catch (e) {
-          console.error("Error getting CSV file name:", e);
-        }
-      }
-    }
-  }, [selectedCsvId]);
+  // Don't auto-inspect CSV data when selected - only inspect when group by values are selected
+  // This prevents CSVs from being set as active dataset until group by is used
 
   const handleImageSelect = (event: React.ChangeEvent<HTMLInputElement>) => {
     const file = event.target.files?.[0];
@@ -628,7 +685,7 @@ const ChatMain = ({
             variant: "destructive",
           });
         },
-        selectedCsvId,
+        selectedCsvIds,
         csvFilterColumns,
         csvFilterValues,
         chat.id,
@@ -684,11 +741,12 @@ const ChatMain = ({
       {/* Header */}
       <div className="border-b border-border/50">
         {/* Dataset Info Banner - always show what data is being used, or context section if selected */}
-        {(chat && chat.selectedMatch && matchData) || hasCurrentSelection || hasFilterSelections || selectedCsvId || (selectedContextSectionId && selectedContextSectionId !== "none" && contextSections.length > 0) ? (
+        {/* Only show banner when there's actual data selected (not just CSVs without group by) */}
+        {(chat && chat.selectedMatch && matchData) || hasCurrentSelection || hasFilterSelections || (selectedContextSectionId && selectedContextSectionId !== "none" && contextSections.length > 0) ? (
           <div className="px-4 py-2 bg-muted/50 border-b border-border/30">
             <div className="text-sm font-medium text-foreground flex items-center justify-between gap-4 flex-wrap">
               <div className="flex flex-wrap items-center gap-2 flex-1 min-w-0">
-                {(chat && chat.selectedMatch && matchData) || hasCurrentSelection || hasFilterSelections || selectedCsvId ? (
+                {(chat && chat.selectedMatch && matchData) || hasCurrentSelection || hasFilterSelections ? (
                   <span className="text-muted-foreground">Active Dataset:</span>
                 ) : (
                   <span className="text-muted-foreground">Active Context:</span>
@@ -719,6 +777,16 @@ const ChatMain = ({
                       .join(', ')}
                   </span>
                 </>
+              ) : (csvFilterColumns.length > 0 && Object.keys(csvFilterValues).some(col => csvFilterValues[col] != null)) ? (
+                // Show CSV filter selections (grouped CSV data)
+                <>
+                  <span className="text-foreground">
+                    Selected Group: {csvFilterColumns
+                      .filter(col => csvFilterValues[col] != null)
+                      .map(col => `${col}=${csvFilterValues[col]}`)
+                      .join(', ')}
+                  </span>
+                </>
               ) : null}
               
               {/* Show match data if no grouped selection */}
@@ -733,48 +801,11 @@ const ChatMain = ({
                 </>
               )}
               
-              {/* Show CSV file if selected */}
-              {selectedCsvId && (() => {
-                try {
-                  const saved = localStorage.getItem("db_csv_files");
-                  if (saved) {
-                    const parsed = JSON.parse(saved);
-                    const files = Array.isArray(parsed) ? parsed : [];
-                    const file = files.find((f: any) => f.id === selectedCsvId);
-                    if (file) {
-                      const csvData = getCsvFileData(selectedCsvId, csvFilterColumns, csvFilterValues);
-                      return (
-                        <>
-                          {(!hasCurrentSelection && !hasFilterSelections && !chat.selectedMatch) && (
-                            <>
-                              <span className="text-foreground">{file.name}</span>
-                              {csvData && Array.isArray(csvData) && (
-                                <span className="text-muted-foreground">
-                                  <span className="ml-1">|</span>
-                                  <span className="ml-1">Rows:</span>
-                                  <span className="font-mono text-xs ml-1">{csvData.length}</span>
-                                </span>
-                              )}
-                            </>
-                          )}
-                          {(hasCurrentSelection || hasFilterSelections || chat.selectedMatch) && (
-                            <span className="text-muted-foreground">
-                              <span className="ml-1">+</span>
-                              <span className="ml-1">{file.name}</span>
-                            </span>
-                          )}
-                        </>
-                      );
-                    }
-                  }
-                } catch (e) {
-                  console.error("Error getting CSV file name:", e);
-                }
-                return null;
-              })()}
+              {/* Show CSV files if selected - but only if there's a group by selection, otherwise don't show in banner */}
+              {/* CSV files are just the "table" - they don't become active dataset until group by is used */}
               
               {/* Show context section in main banner if no data but context is selected */}
-              {!hasCurrentSelection && !hasFilterSelections && !chat.selectedMatch && !selectedCsvId && selectedContextSectionId && selectedContextSectionId !== "none" && contextSections.length > 0 && (
+              {!hasCurrentSelection && !hasFilterSelections && !chat.selectedMatch && selectedContextSectionId && selectedContextSectionId !== "none" && contextSections.length > 0 && (
                 <span className="text-foreground">
                   {(() => {
                     const section = contextSections.find(s => s.id === selectedContextSectionId);
@@ -787,7 +818,7 @@ const ChatMain = ({
               {/* Display Values and Context Section - shown on the right side */}
               {((matchDisplayColumns.length > 0 && Object.keys(matchDisplayValues).some(col => matchDisplayValues[col] != null)) ||
                 (csvDisplayColumns.length > 0 && Object.keys(csvDisplayValues).some(col => csvDisplayValues[col] != null)) ||
-                (selectedContextSectionId && selectedContextSectionId !== "none" && contextSections.length > 0 && ((chat && chat.selectedMatch && matchData) || hasCurrentSelection || hasFilterSelections || selectedCsvId))) && (
+                (selectedContextSectionId && selectedContextSectionId !== "none" && contextSections.length > 0 && ((chat && chat.selectedMatch && matchData) || hasCurrentSelection || hasFilterSelections))) && (
                 <div className="flex items-center gap-2 flex-shrink-0 text-xs text-muted-foreground whitespace-nowrap">
                   {/* Match display values */}
                   {matchDisplayColumns
@@ -846,7 +877,7 @@ const ChatMain = ({
             )}
             <div className="flex-1">
               <div className="flex gap-2 items-end">
-                {/* Context Section Selector */}
+                {/* Context Section Selector - appears with group by sections */}
                 {contextSections.length > 0 && chat && (
                   <div className="w-48">
                     <Select
@@ -865,7 +896,7 @@ const ChatMain = ({
                             csvFilterValues,
                             csvDisplayColumns,
                             csvDisplayValues,
-                            selectedCsvId,
+                            selectedCsvIds,
                             selectedContextSectionId: newId,
                           });
                         }
@@ -886,13 +917,15 @@ const ChatMain = ({
                     </Select>
                   </div>
                 )}
-                <div className="flex-1">
-                  <MatchSelector
-                    selectedMatch={chat.selectedMatch}
-                    selectedFilterColumns={matchFilterColumns}
-                    selectedFilterValues={matchFilterValues}
-                    chatId={chat.id}
-                    onSelectMatch={(matchId, filterColumns, filterValues, displayColumns, displayValues) => {
+                {/* SQL Group By - appears when database is connected */}
+                {(dbConnected || isDatabaseConnected()) && (
+                  <div className="flex-1">
+                    <MatchSelector
+                      selectedMatch={chat.selectedMatch}
+                      selectedFilterColumns={matchFilterColumns}
+                      selectedFilterValues={matchFilterValues}
+                      chatId={chat.id}
+                      onSelectMatch={(matchId, filterColumns, filterValues, displayColumns, displayValues) => {
                     console.log('ChatMain onSelectMatch called with:', { matchId, filterColumns, filterValues, displayColumns, displayValues });
                     // If matchId is null, we're using grouped selection - clear match selection
                     if (matchId === null) {
@@ -939,53 +972,67 @@ const ChatMain = ({
                         csvFilterValues,
                         csvDisplayColumns,
                         csvDisplayValues,
-                        selectedCsvId,
+                        selectedCsvIds,
                         selectedContextSectionId,
                       });
                     }
                     console.log('State updated - matchFilterColumns:', newColumns, 'matchFilterValues:', filteredNewValues);
                   }}
-                  />
-                </div>
+                    />
+                  </div>
+                )}
+                {/* CSV Group By - appears when CSV files are uploaded */}
+                {/* CSV File Upload/Selection with Group By - always visible */}
                 <div className="flex-1">
                   <CSVSelector
-                  selectedCsvId={selectedCsvId}
-                  selectedFilterColumns={csvFilterColumns}
-                  selectedFilterValues={csvFilterValues}
-                  chatId={chat.id}
-                  onSelectCsv={(csvId, filterColumns, filterValues, displayColumns, displayValues) => {
-                    console.log('ChatMain onSelectCsv called with:', { csvId, filterColumns, filterValues, displayColumns, displayValues });
-                    const newCsvId = csvId;
-                    const newColumns = filterColumns || [];
-                    const newValues = filterValues || {};
-                    const newDisplayColumns = displayColumns || [];
-                    const newDisplayValues = displayValues || {};
-                    setSelectedCsvId(newCsvId);
-                    setCsvFilterColumns(newColumns);
-                    setCsvFilterValues(newValues);
-                    setCsvDisplayColumns(newDisplayColumns);
-                    setCsvDisplayValues(newDisplayValues);
-                    // Save to chat object
-                    if (onUpdateFilters) {
-                      onUpdateFilters(chat.id, {
-                        matchFilterColumns,
-                        matchFilterValues,
-                        matchDisplayColumns,
-                        matchDisplayValues,
-                        csvFilterColumns: newColumns,
-                        csvFilterValues: newValues,
-                        csvDisplayColumns: newDisplayColumns,
-                        csvDisplayValues: newDisplayValues,
-                        selectedCsvId: newCsvId,
-                        selectedContextSectionId,
+                    selectedCsvIds={selectedCsvIds}
+                    selectedFilterColumns={csvFilterColumns}
+                    selectedFilterValues={csvFilterValues}
+                    chatId={chat.id}
+                    showGroupBy={false}
+                    onSelectCsv={(csvIds, filterColumns, filterValues, displayColumns, displayValues) => {
+                      console.log('ChatMain onSelectCsv called with:', { csvIds, filterColumns, filterValues, displayColumns, displayValues });
+                      const newCsvIds = csvIds || [];
+                      const newColumns = filterColumns || [];
+                      const newValues = filterValues || {};
+                      const newDisplayColumns = displayColumns || [];
+                      const newDisplayValues = displayValues || {};
+                      
+                      // Filter to only include group columns with values
+                      const filteredNewValues: Record<string, string | null> = {};
+                      newColumns.forEach(col => {
+                        if (newValues[col] != null) {
+                          filteredNewValues[col] = newValues[col];
+                        }
                       });
-                    }
-                    console.log('State updated - csvFilterColumns:', newColumns);
-                  }}
-                />
+                      
+                      setSelectedCsvIds(newCsvIds);
+                      setCsvFilterColumns(newColumns);
+                      setCsvFilterValues(filteredNewValues);
+                      setCsvDisplayColumns(newDisplayColumns);
+                      setCsvDisplayValues(newDisplayValues);
+                      
+                      // Save to chat object
+                      if (onUpdateFilters) {
+                        onUpdateFilters(chat.id, {
+                          matchFilterColumns,
+                          matchFilterValues,
+                          matchDisplayColumns,
+                          matchDisplayValues,
+                          csvFilterColumns: newColumns,
+                          csvFilterValues: filteredNewValues,
+                          csvDisplayColumns: newDisplayColumns,
+                          csvDisplayValues: newDisplayValues,
+                          selectedCsvIds: newCsvIds,
+                          selectedContextSectionId,
+                        });
+                      }
+                      console.log('State updated - csvFilterColumns:', newColumns, 'selectedCsvIds:', newCsvIds);
+                    }}
+                  />
+                </div>
               </div>
             </div>
-          </div>
           </div>
         )}
         {/* Show menu button when messages exist but selectors are hidden */}

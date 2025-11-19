@@ -25,7 +25,7 @@ export interface Chat {
   csvFilterValues?: Record<string, string | null>;
   csvDisplayColumns?: string[]; // Columns set to display mode for CSV
   csvDisplayValues?: Record<string, string | null>; // Display values for the selected CSV group
-  selectedCsvId?: string | null;
+  selectedCsvIds?: string[]; // Array of CSV IDs to combine into a table
   selectedContextSectionId?: string | null; // Selected context section ID for this chat
 }
 
