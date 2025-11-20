@@ -12,9 +12,10 @@ interface MatchSelectorProps {
   selectedFilterValues: Record<string, string | null>;
   onSelectMatch: (matchId: string | null, filterColumns?: string[], filterValues?: Record<string, string | null>, displayColumns?: string[], displayValues?: Record<string, string | null>) => void;
   chatId?: string; // Chat ID for tracking Value Info associations
+  disabled?: boolean; // Disable when CSV selection is active
 }
 
-const MatchSelector = ({ selectedMatch, selectedFilterColumns, selectedFilterValues, onSelectMatch, chatId }: MatchSelectorProps) => {
+const MatchSelector = ({ selectedMatch, selectedFilterColumns, selectedFilterValues, onSelectMatch, chatId, disabled = false }: MatchSelectorProps) => {
   const [matches, setMatches] = useState<Match[]>([]);
   const [availableColumns, setAvailableColumns] = useState<{ value: string; label: string }[]>([]);
   const [columnModes, setColumnModes] = useState<Record<string, 'group' | 'display'>>({});
@@ -951,6 +952,7 @@ const MatchSelector = ({ selectedMatch, selectedFilterColumns, selectedFilterVal
               getCombinedGroupValues={getCombinedGroupValues}
               placeholder="Group by..."
               groupedRowsWithDisplay={groupedRowsWithDisplay}
+              disabled={disabled}
             />
           </div>
         )}

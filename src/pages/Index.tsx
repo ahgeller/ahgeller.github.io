@@ -47,7 +47,7 @@ const Index = () => {
           // Ensure all chats have a model set
           const chatsWithModels = parsedChats.map(chat => ({
             ...chat,
-            model: chat.model || DEFAULT_MODEL
+            model: chat.model || ""
           }));
           setChats(chatsWithModels);
           setChatsLoaded(true);
@@ -82,7 +82,7 @@ const Index = () => {
       messages: [],
       createdAt: Date.now(),
       selectedMatch: null,
-      model: DEFAULT_MODEL,
+      model: "",
       reasoningEnabled: true, // Enable reasoning by default
     };
     // Use functional update to avoid stale closure issues

@@ -1,18 +1,141 @@
 import { useState, useEffect } from "react";
 import { Input } from "@/components/ui/input";
 import { Button } from "@/components/ui/button";
-import { X, ExternalLink, Palette } from "lucide-react";
+import { X, ExternalLink, Palette, Plus, Trash2, ChevronDown, ChevronUp } from "lucide-react";
 import { API_PROVIDERS, getApiKey, setApiKey, removeApiKey, hasApiKey } from "@/lib/apiKeys";
 import { themes, getStoredTheme, setStoredTheme, applyTheme, type ColorScheme } from "@/lib/themes";
+import { 
+  getOpenRouterModels, 
+  addOpenRouterModel, 
+  updateOpenRouterModel, 
+  removeOpenRouterModel,
+  type OpenRouterModel 
+} from "@/lib/openRouterModels";
 
 interface ApiKeySettingsProps {
   isOpen: boolean;
   onClose: () => void;
 }
 
+interface ModelRowProps {
+  model: OpenRouterModel;
+  onUpdate: (field: keyof OpenRouterModel, value: any) => void;
+  onRemove: () => void;
+}
+
+const ModelRow = ({ model, onUpdate, onRemove }: ModelRowProps) => {
+  const [localModel, setLocalModel] = useState(model);
+  
+  // Update local state when model prop changes
+  useEffect(() => {
+    setLocalModel(model);
+  }, [model]);
+  
+  const handleChange = (field: keyof OpenRouterModel, value: any) => {
+    const updated = { ...localModel, [field]: value };
+    setLocalModel(updated);
+    onUpdate(field, value);
+  };
+  
+  const formatTokens = (tokens: number) => {
+    if (tokens >= 1000000) {
+      return `${(tokens / 1000000).toFixed(1)}M`;
+    } else if (tokens >= 1000) {
+      return `${(tokens / 1000).toFixed(0)}K`;
+    }
+    return tokens.toString();
+  };
+  
+  return (
+    <div className="p-3 border border-border rounded-lg space-y-2 bg-background hover:bg-accent/30 transition-colors">
+      <div className="flex items-start gap-2">
+        <div className="flex-1 grid grid-cols-2 gap-2">
+          <div>
+            <label className="text-xs text-muted-foreground mb-1 block">Model ID</label>
+            <Input
+              value={localModel.id}
+              onChange={(e) => handleChange('id', e.target.value)}
+              className="text-xs"
+            />
+          </div>
+          <div>
+            <label className="text-xs text-muted-foreground mb-1 block">Display Name</label>
+            <Input
+              value={localModel.name}
+              onChange={(e) => handleChange('name', e.target.value)}
+              className="text-xs"
+            />
+          </div>
+        </div>
+        <Button
+          variant="ghost"
+          size="sm"
+          onClick={onRemove}
+          className="text-red-500 hover:text-red-700 hover:bg-red-500/10 mt-6"
+          title="Remove model"
+        >
+          <Trash2 className="h-4 w-4" />
+        </Button>
+      </div>
+      <div className="grid grid-cols-3 gap-2">
+        <div>
+          <label className="text-xs text-muted-foreground mb-1 block">
+            Context Limit (tokens)
+            {localModel.contextLimit > 0 && (
+              <span className="ml-1 text-muted-foreground font-medium">
+                ({formatTokens(localModel.contextLimit)})
+              </span>
+            )}
+          </label>
+          <Input
+            type="number"
+            value={localModel.contextLimit}
+            onChange={(e) => handleChange('contextLimit', parseInt(e.target.value) || 0)}
+            className="text-xs"
+            min="0"
+          />
+        </div>
+        <div className="flex items-center gap-2 pt-6">
+          <input
+            type="checkbox"
+            checked={localModel.free}
+            onChange={(e) => handleChange('free', e.target.checked)}
+            className="rounded"
+            id={`free-${model.id}`}
+          />
+          <label htmlFor={`free-${model.id}`} className="text-xs text-muted-foreground cursor-pointer">
+            Free
+          </label>
+        </div>
+        <div className="flex items-center gap-2 pt-6">
+          <input
+            type="checkbox"
+            checked={localModel.disabled}
+            onChange={(e) => handleChange('disabled', e.target.checked)}
+            className="rounded"
+            id={`disabled-${model.id}`}
+          />
+          <label htmlFor={`disabled-${model.id}`} className="text-xs text-muted-foreground cursor-pointer">
+            Disabled
+          </label>
+        </div>
+      </div>
+    </div>
+  );
+};
+
 const ApiKeySettings = ({ isOpen, onClose }: ApiKeySettingsProps) => {
   const [apiKeys, setApiKeys] = useState<Record<string, string>>({});
   const [selectedTheme, setSelectedTheme] = useState<ColorScheme>('dark');
+  const [openRouterModels, setOpenRouterModels] = useState<OpenRouterModel[]>([]);
+  const [showOpenRouterModels, setShowOpenRouterModels] = useState(false);
+  const [newModel, setNewModel] = useState<Partial<OpenRouterModel>>({
+    id: '',
+    name: '',
+    contextLimit: 128000,
+    free: false,
+    disabled: false,
+  });
 
   useEffect(() => {
     if (isOpen) {
@@ -28,6 +151,11 @@ const ApiKeySettings = ({ isOpen, onClose }: ApiKeySettingsProps) => {
       
       // Load current theme
       setSelectedTheme(getStoredTheme());
+      
+      // Load OpenRouter models
+      setOpenRouterModels(getOpenRouterModels());
+      // Keep dropdown closed by default
+      setShowOpenRouterModels(false);
     }
   }, [isOpen]);
 
@@ -58,6 +186,49 @@ const ApiKeySettings = ({ isOpen, onClose }: ApiKeySettingsProps) => {
     setSelectedTheme(theme);
     setStoredTheme(theme);
     applyTheme(theme);
+  };
+
+  const triggerModelUpdate = () => {
+    setOpenRouterModels(getOpenRouterModels());
+    // Trigger custom event to update ModelSelector
+    window.dispatchEvent(new CustomEvent('openrouter-models-updated'));
+  };
+
+  const handleModelUpdate = (modelId: string, field: keyof OpenRouterModel, value: any) => {
+    try {
+      updateOpenRouterModel(modelId, { [field]: value });
+      triggerModelUpdate();
+    } catch (error) {
+      console.error('Error updating model:', error);
+      alert(error instanceof Error ? error.message : 'Failed to update model');
+    }
+  };
+
+  const handleAddModel = () => {
+    if (!newModel.id || !newModel.name || !newModel.contextLimit) {
+      alert('Please fill in all required fields (ID, Name, Context Limit)');
+      return;
+    }
+    try {
+      addOpenRouterModel(newModel as OpenRouterModel);
+      setNewModel({ id: '', name: '', contextLimit: 128000, free: false, disabled: false });
+      triggerModelUpdate();
+    } catch (error) {
+      console.error('Error adding model:', error);
+      alert(error instanceof Error ? error.message : 'Failed to add model');
+    }
+  };
+
+  const handleRemoveModel = (modelId: string) => {
+    if (confirm('Are you sure you want to remove this model? Default models will be disabled instead of removed.')) {
+      try {
+        removeOpenRouterModel(modelId);
+        triggerModelUpdate();
+      } catch (error) {
+        console.error('Error removing model:', error);
+        alert(error instanceof Error ? error.message : 'Failed to remove model');
+      }
+    }
   };
 
   if (!isOpen) return null;
@@ -132,6 +303,113 @@ const ApiKeySettings = ({ isOpen, onClose }: ApiKeySettingsProps) => {
               </div>
             ))}
           </div>
+          
+          {/* OpenRouter Models Management */}
+          {hasApiKey('openrouter') && (
+            <div className="mt-4 p-3 border border-border rounded-lg">
+              <button
+                onClick={() => setShowOpenRouterModels(!showOpenRouterModels)}
+                className="flex items-center justify-between w-full text-left hover:bg-accent/50 rounded p-2 -m-2"
+              >
+                <h4 className="text-md font-semibold">OpenRouter Models ({openRouterModels.length})</h4>
+                {showOpenRouterModels ? (
+                  <ChevronUp className="h-4 w-4" />
+                ) : (
+                  <ChevronDown className="h-4 w-4" />
+                )}
+              </button>
+              
+              {showOpenRouterModels && (
+                <div className="mt-4 space-y-4">
+                  <p className="text-sm text-muted-foreground">
+                    Manage OpenRouter models. All fields are editable. Edit context limits (tokens), add new models, or disable/remove models.
+                  </p>
+                  
+                  {/* Existing Models */}
+                  <div className="space-y-3 max-h-[400px] overflow-y-auto pr-2">
+                    {openRouterModels.length === 0 ? (
+                      <p className="text-sm text-muted-foreground text-center py-4">No models configured. Add one below.</p>
+                    ) : (
+                      openRouterModels.map((model) => (
+                        <ModelRow
+                          key={model.id}
+                          model={model}
+                          onUpdate={(field, value) => handleModelUpdate(model.id, field, value)}
+                          onRemove={() => handleRemoveModel(model.id)}
+                        />
+                      ))
+                    )}
+                  </div>
+                  
+                  {/* Add New Model */}
+                  <div className="p-3 border-2 border-dashed border-border rounded-lg space-y-3 bg-accent/20">
+                    <h5 className="text-sm font-semibold flex items-center gap-2">
+                      <Plus className="h-4 w-4" />
+                      Add New Model
+                    </h5>
+                    <div className="grid grid-cols-2 gap-2">
+                      <div>
+                        <label className="text-xs text-muted-foreground">Model ID *</label>
+                        <Input
+                          value={newModel.id || ''}
+                          onChange={(e) => setNewModel(prev => ({ ...prev, id: e.target.value }))}
+                          placeholder="e.g., openrouter/model-name"
+                          className="text-xs"
+                        />
+                      </div>
+                      <div>
+                        <label className="text-xs text-muted-foreground">Display Name *</label>
+                        <Input
+                          value={newModel.name || ''}
+                          onChange={(e) => setNewModel(prev => ({ ...prev, name: e.target.value }))}
+                          placeholder="e.g., Model Name"
+                          className="text-xs"
+                        />
+                      </div>
+                    </div>
+                    <div className="grid grid-cols-3 gap-2">
+                      <div>
+                        <label className="text-xs text-muted-foreground">Context Limit (tokens) *</label>
+                        <Input
+                          type="number"
+                          value={newModel.contextLimit || ''}
+                          onChange={(e) => setNewModel(prev => ({ ...prev, contextLimit: parseInt(e.target.value) || 0 }))}
+                          placeholder="128000"
+                          className="text-xs"
+                        />
+                      </div>
+                      <div className="flex items-center gap-2 pt-6">
+                        <input
+                          type="checkbox"
+                          checked={newModel.free || false}
+                          onChange={(e) => setNewModel(prev => ({ ...prev, free: e.target.checked }))}
+                          className="rounded"
+                        />
+                        <label className="text-xs text-muted-foreground">Free</label>
+                      </div>
+                      <div className="flex items-center gap-2 pt-6">
+                        <input
+                          type="checkbox"
+                          checked={newModel.disabled || false}
+                          onChange={(e) => setNewModel(prev => ({ ...prev, disabled: e.target.checked }))}
+                          className="rounded"
+                        />
+                        <label className="text-xs text-muted-foreground">Disabled</label>
+                      </div>
+                    </div>
+                    <Button
+                      size="sm"
+                      onClick={handleAddModel}
+                      className="w-full"
+                    >
+                      <Plus className="h-4 w-4 mr-2" />
+                      Add Model
+                    </Button>
+                  </div>
+                </div>
+              )}
+            </div>
+          )}
         </div>
 
         {/* Free / No Credit Card Needed */}

@@ -13,6 +13,7 @@ interface CSVSelectorProps {
   onSelectCsv: (csvIds: string[], filterColumns?: string[], filterValues?: Record<string, string | null>, displayColumns?: string[], displayValues?: Record<string, string | null>) => void;
   chatId?: string; // Chat ID for tracking Value Info associations
   showGroupBy?: boolean; // Whether to show the group by section separately
+  disabled?: boolean; // Disable when SQL selection is active
 }
 
 interface CSVFile {
@@ -26,7 +27,7 @@ interface CSVFile {
 
 type ColumnMode = 'group' | 'display';
 
-const CSVSelector = ({ selectedCsvIds, selectedFilterColumns, selectedFilterValues, onSelectCsv, chatId, showGroupBy = false }: CSVSelectorProps) => {
+const CSVSelector = ({ selectedCsvIds, selectedFilterColumns, selectedFilterValues, onSelectCsv, chatId, showGroupBy = false, disabled = false }: CSVSelectorProps) => {
   const [csvFiles, setCsvFiles] = useState<CSVFile[]>([]);
   const [filteredCsvFiles, setFilteredCsvFiles] = useState<CSVFile[]>([]);
   const [isOpen, setIsOpen] = useState(false);
@@ -824,6 +825,7 @@ const CSVSelector = ({ selectedCsvIds, selectedFilterColumns, selectedFilterValu
           getCombinedGroupValues={getCombinedGroupValues}
           groupedRowsWithDisplay={groupedRowsWithDisplay}
           placeholder="Group by..."
+          disabled={disabled}
         />
       </div>
     );
@@ -967,6 +969,7 @@ const CSVSelector = ({ selectedCsvIds, selectedFilterColumns, selectedFilterValu
               groupedRowsWithDisplay={groupedRowsWithDisplay}
               placeholder="Group by..."
               dataSourceKey={selectedCsvIds.join(',')} // Key that changes when CSV selection changes
+              disabled={disabled}
             />
           </div>
         )}

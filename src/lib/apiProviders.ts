@@ -102,34 +102,33 @@ async function callOpenRouterApi(options: ApiCallOptions) {
     // We set max_tokens to leave room for input (typically 60-70% of total for output)
     let maxTokens = 1500000; // Default high limit for main models
     
-    // Model-specific context limits (total context window)
-    const modelContextLimits: Record<string, number> = {
-      'qwen/qwen3-coder:free': 262000,
-      'kwaipilot/kat-coder-pro:free': 256000,
-      'tngtech/deepseek-r1t2-chimera:free': 164000,
-      'z-ai/glm-4.5-air:free': 131000,
-    };
+    // Model-specific context limits (total context window) - loaded dynamically
+    const { getModelContextLimitsMap } = await import('./openRouterModels');
+    const modelContextLimits = getModelContextLimitsMap();
     
     // Check for exact model match first
     if (modelContextLimits[model]) {
       const totalContext = modelContextLimits[model];
-      // Reserve 30% for input, use 70% for output (conservative approach)
-      maxTokens = Math.floor(totalContext * 0.7);
+      // Reserve 40% for input, use 60% for output (more input capacity)
+      maxTokens = Math.floor(totalContext * 0.6);
     } else {
       // Fallback: check for partial matches (case-insensitive)
       const modelLower = model.toLowerCase();
-      if (modelLower.includes('qwen3-coder') || modelLower.includes('qwen/qwen3-coder')) {
+      if (modelLower.includes('grok-4.1-fast') || modelLower.includes('x-ai/grok-4.1-fast')) {
+        // Grok 4.1 Fast: 2M context
+        maxTokens = 1200000; // ~60% of 2M (800K for input)
+      } else if (modelLower.includes('qwen3-coder') || modelLower.includes('qwen/qwen3-coder')) {
         // Qwen3 Coder: 262k context
-        maxTokens = 183000; // ~70% of 262k
+        maxTokens = 157000; // ~60% of 262k
       } else if (modelLower.includes('kat-coder') || modelLower.includes('kwaipilot/kat-coder')) {
         // Kat Coder Pro: 256k context
-        maxTokens = 179000; // ~70% of 256k
+        maxTokens = 154000; // ~60% of 256k
       } else if (modelLower.includes('deepseek-r1t2-chimera') || modelLower.includes('tngtech/deepseek-r1t2-chimera')) {
         // DeepSeek R1T2 Chimera: 164k context
-        maxTokens = 114000; // ~70% of 164k
+        maxTokens = 98000; // ~60% of 164k
       } else if (modelLower.includes('glm-4.5-air') || modelLower.includes('z-ai/glm-4.5-air')) {
         // GLM 4.5 Air: 131k context
-        maxTokens = 91000; // ~70% of 131k
+        maxTokens = 79000; // ~60% of 131k
       } else if (modelLower.includes('deepseek-r1') || modelLower.includes('r1t2')) {
         // Other DeepSeek R1 models: typically 128k-164k context
         maxTokens = 100000; // Conservative limit

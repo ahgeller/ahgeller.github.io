@@ -1,7 +1,9 @@
-import { AVAILABLE_MODELS, DEFAULT_MODEL } from "@/lib/chatApi";
+import { DEFAULT_MODEL } from "@/lib/chatApi";
+import { getAvailableModelsFormat } from "@/lib/openRouterModels";
 import { modelHasApiKey, getProviderForModel } from "@/lib/apiKeys";
 import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/utils";
+import { useState, useEffect } from "react";
 
 interface ModelSelectorProps {
   selectedModel: string;
@@ -10,17 +12,41 @@ interface ModelSelectorProps {
 }
 
 const ModelSelector = ({ selectedModel, onSelectModel, showWhenEmpty = true }: ModelSelectorProps) => {
-  const currentModel = selectedModel || DEFAULT_MODEL;
+  const currentModel = selectedModel || "";
+  const [availableModels, setAvailableModels] = useState(getAvailableModelsFormat());
+
+  // Reload models when they might have changed
+  useEffect(() => {
+    const handleStorageChange = () => {
+      setAvailableModels(getAvailableModelsFormat());
+    };
+    
+    // Listen for storage changes (cross-tab)
+    window.addEventListener('storage', handleStorageChange);
+    // Listen for custom events (same-tab)
+    window.addEventListener('openrouter-models-updated', handleStorageChange);
+    // Also check periodically (fallback)
+    const interval = setInterval(handleStorageChange, 2000);
+    
+    // Initial load
+    handleStorageChange();
+    
+    return () => {
+      window.removeEventListener('storage', handleStorageChange);
+      window.removeEventListener('openrouter-models-updated', handleStorageChange);
+      clearInterval(interval);
+    };
+  }, []);
 
   // Filter to only show models that have API keys
-  const availableModels = AVAILABLE_MODELS.filter(model => {
+  const modelsWithKeys = availableModels.filter(model => {
     const provider = getProviderForModel(model.id);
     if (!provider) return false; // Model not mapped to a provider
     return modelHasApiKey(model.id);
   });
 
   // If no models available, show message
-  if (availableModels.length === 0) {
+  if (modelsWithKeys.length === 0) {
     return (
       <div className="p-4 border-b border-border/50 text-center text-sm text-muted-foreground">
         No models available. Please add API keys in Settings.
@@ -33,23 +59,33 @@ const ModelSelector = ({ selectedModel, onSelectModel, showWhenEmpty = true }: M
       {availableModels.map((model) => {
         const provider = getProviderForModel(model.id);
         const hasKey = modelHasApiKey(model.id);
+        const isDisabled = model.disabled || !hasKey;
         
         return (
           <Button
             key={model.id}
             variant={currentModel === model.id ? "default" : "outline"}
             size="sm"
-            onClick={() => onSelectModel(model.id)}
+            onClick={() => !isDisabled && onSelectModel(model.id)}
+            disabled={isDisabled}
             className={cn(
               "text-xs",
               currentModel === model.id && "bg-primary text-primary-foreground",
-              model.free && "border-primary/50"
+              model.free && "border-primary/50",
+              isDisabled && "opacity-50 cursor-not-allowed"
             )}
-            title={provider ? `${provider.name} - ${model.name}` : model.name}
+            title={
+              isDisabled 
+                ? (model.disabled ? "Model is currently down" : "API key required")
+                : (provider ? `${provider.name} - ${model.name}` : model.name)
+            }
           >
             {model.name}
-            {model.free && (
-              <span className="ml-1 text-[10px] opacity-75">(Free)</span>
+            {!model.free && !isDisabled && (
+              <span className="ml-1 text-[10px] opacity-75">$</span>
+            )}
+            {model.disabled && (
+              <span className="ml-1 text-[10px] opacity-75">(Down)</span>
             )}
           </Button>
         );

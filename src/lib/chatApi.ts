@@ -6,17 +6,12 @@ import { getCsvDataRows } from "@/lib/csvStorage";
 
 // Old Gemini API functions removed - now using apiProviders.ts
 
-export const DEFAULT_MODEL = "openrouter/sherlock-think-alpha";
+import { getAvailableModelsFormat } from "./openRouterModels";
 
-// Available AI models via OpenRouter
-export const AVAILABLE_MODELS = [
-  { id: "openrouter/sherlock-think-alpha", name: "Sherlock Think Alpha (Reasoning + Vision)", free: false },
-  { id: "tngtech/deepseek-r1t2-chimera:free", name: "DeepSeek R1T2 Chimera (Free)", free: true },
-  { id: "openrouter/sherlock-dash-alpha", name: "Sherlock Dash Alpha (Vision)", free: true },
-  { id: "qwen/qwen3-coder:free", name: "Qwen3 Coder (Free)", free: true },
-  { id: "kwaipilot/kat-coder-pro:free", name: "Kat Coder Pro (Free)", free: true },
-  { id: "z-ai/glm-4.5-air:free", name: "GLM 4.5 Air (Free)", free: true },
-];
+export const DEFAULT_MODEL = ""; // No default - user must select
+
+// Available AI models via OpenRouter (loaded dynamically from storage)
+export const AVAILABLE_MODELS = getAvailableModelsFormat();
 
 // Helper function to load coding rules from localStorage
 function getCodingRules(): string {
@@ -1428,7 +1423,7 @@ export async function sendChatMessage(
   onDelta: (chunk: string) => void,
   onDone: () => void,
   onError: (error: string) => void,
-  csvId: string | null = null,
+  csvId: string | string[] | null = null,
   csvFilterColumns: string[] | null = null,
   csvFilterValues: Record<string, string | null> | null = null,
   chatId?: string,

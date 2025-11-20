@@ -144,11 +144,19 @@ const ChatMain = ({
         if (saved) {
           const parsed = JSON.parse(saved);
           if (Array.isArray(parsed) && parsed.length > 0) {
+            console.log('ChatMain: Loaded context sections:', parsed.length);
             setContextSections(parsed);
+          } else {
+            console.log('ChatMain: No context sections found or empty array');
+            setContextSections([]);
           }
+        } else {
+          console.log('ChatMain: No context sections in localStorage');
+          setContextSections([]);
         }
       } catch (e) {
         console.error('Error loading context sections:', e);
+        setContextSections([]);
       }
     };
     
@@ -226,7 +234,7 @@ const ChatMain = ({
   const { toast } = useToast();
 
   // Check if current model supports reasoning
-  const currentModel = chat?.model || DEFAULT_MODEL;
+  const currentModel = chat?.model || (DEFAULT_MODEL || "");
   const supportsReasoning = currentModel.includes('sherlock-think') || currentModel.includes('think') || currentModel.includes('deepseek-r1');
   const reasoningEnabled = chat?.reasoningEnabled ?? true; // Default to true for new chats
   
@@ -877,46 +885,6 @@ const ChatMain = ({
             )}
             <div className="flex-1">
               <div className="flex gap-2 items-end">
-                {/* Context Section Selector - appears with group by sections */}
-                {contextSections.length > 0 && chat && (
-                  <div className="w-48">
-                    <Select
-                      value={selectedContextSectionId === null || selectedContextSectionId === undefined ? "none" : selectedContextSectionId}
-                      onValueChange={(value: string) => {
-                        // "all" = null (combine all sections), "none" = "none" (no sections), otherwise = section id
-                        const newId = value === "all" ? null : value;
-                        setSelectedContextSectionId(newId);
-                        if (onUpdateFilters && chat) {
-                          onUpdateFilters(chat.id, {
-                            matchFilterColumns,
-                            matchFilterValues,
-                            matchDisplayColumns,
-                            matchDisplayValues,
-                            csvFilterColumns,
-                            csvFilterValues,
-                            csvDisplayColumns,
-                            csvDisplayValues,
-                            selectedCsvIds,
-                            selectedContextSectionId: newId,
-                          });
-                        }
-                      }}
-                    >
-                      <SelectTrigger className="h-9">
-                        <SelectValue placeholder="Context Section" />
-                      </SelectTrigger>
-                      <SelectContent>
-                        <SelectItem value="all">All Sections</SelectItem>
-                        <SelectItem value="none">None</SelectItem>
-                        {contextSections.map((section) => (
-                          <SelectItem key={section.id} value={section.id}>
-                            {section.title || `Section ${section.id}`}
-                          </SelectItem>
-                        ))}
-                      </SelectContent>
-                    </Select>
-                  </div>
-                )}
                 {/* SQL Group By - appears when database is connected */}
                 {(dbConnected || isDatabaseConnected()) && (
                   <div className="flex-1">
@@ -925,6 +893,7 @@ const ChatMain = ({
                       selectedFilterColumns={matchFilterColumns}
                       selectedFilterValues={matchFilterValues}
                       chatId={chat.id}
+                      disabled={csvFilterColumns.length > 0 && Object.keys(csvFilterValues).some(col => csvFilterValues[col] != null)}
                       onSelectMatch={(matchId, filterColumns, filterValues, displayColumns, displayValues) => {
                     console.log('ChatMain onSelectMatch called with:', { matchId, filterColumns, filterValues, displayColumns, displayValues });
                     // If matchId is null, we're using grouped selection - clear match selection
@@ -961,6 +930,17 @@ const ChatMain = ({
                     setMatchFilterValues(filteredNewValues);
                     setMatchDisplayColumns(newDisplayColumns);
                     setMatchDisplayValues(newDisplayValues);
+                    
+                    // Clear CSV grouped selection when SQL selection is made (but keep CSV files selected)
+                    if (newColumns.length > 0 && Object.keys(filteredNewValues).some(col => filteredNewValues[col] != null)) {
+                      // Don't clear selectedCsvIds - keep CSV files selected so UI remains visible
+                      // Only clear the filter columns/values (grouped selection)
+                      setCsvFilterColumns([]);
+                      setCsvFilterValues({});
+                      setCsvDisplayColumns([]);
+                      setCsvDisplayValues({});
+                    }
+                    
                     // Save to chat object
                     if (onUpdateFilters) {
                       onUpdateFilters(chat.id, {
@@ -968,11 +948,11 @@ const ChatMain = ({
                         matchFilterValues: filteredNewValues,
                         matchDisplayColumns: newDisplayColumns,
                         matchDisplayValues: newDisplayValues,
-                        csvFilterColumns,
-                        csvFilterValues,
-                        csvDisplayColumns,
-                        csvDisplayValues,
-                        selectedCsvIds,
+                        csvFilterColumns: newColumns.length > 0 && Object.keys(filteredNewValues).some(col => filteredNewValues[col] != null) ? [] : csvFilterColumns,
+                        csvFilterValues: newColumns.length > 0 && Object.keys(filteredNewValues).some(col => filteredNewValues[col] != null) ? {} : csvFilterValues,
+                        csvDisplayColumns: newColumns.length > 0 && Object.keys(filteredNewValues).some(col => filteredNewValues[col] != null) ? [] : csvDisplayColumns,
+                        csvDisplayValues: newColumns.length > 0 && Object.keys(filteredNewValues).some(col => filteredNewValues[col] != null) ? {} : csvDisplayValues,
+                        selectedCsvIds: selectedCsvIds, // Keep CSV files selected even when SQL has grouped selection
                         selectedContextSectionId,
                       });
                     }
@@ -990,6 +970,7 @@ const ChatMain = ({
                     selectedFilterValues={csvFilterValues}
                     chatId={chat.id}
                     showGroupBy={false}
+                    disabled={matchFilterColumns.length > 0 && Object.keys(matchFilterValues).some(col => matchFilterValues[col] != null)}
                     onSelectCsv={(csvIds, filterColumns, filterValues, displayColumns, displayValues) => {
                       console.log('ChatMain onSelectCsv called with:', { csvIds, filterColumns, filterValues, displayColumns, displayValues });
                       const newCsvIds = csvIds || [];
@@ -1012,13 +993,23 @@ const ChatMain = ({
                       setCsvDisplayColumns(newDisplayColumns);
                       setCsvDisplayValues(newDisplayValues);
                       
+                      // Clear SQL grouped selection when CSV selection is made (but keep match selected if it exists)
+                      if (newColumns.length > 0 && Object.keys(filteredNewValues).some(col => filteredNewValues[col] != null)) {
+                        // Only clear the filter columns/values (grouped selection), not the match itself
+                        setMatchFilterColumns([]);
+                        setMatchFilterValues({});
+                        setMatchDisplayColumns([]);
+                        setMatchDisplayValues({});
+                        // Don't clear chat.selectedMatch - keep it so UI remains visible
+                      }
+                      
                       // Save to chat object
                       if (onUpdateFilters) {
                         onUpdateFilters(chat.id, {
-                          matchFilterColumns,
-                          matchFilterValues,
-                          matchDisplayColumns,
-                          matchDisplayValues,
+                          matchFilterColumns: newColumns.length > 0 && Object.keys(filteredNewValues).some(col => filteredNewValues[col] != null) ? [] : matchFilterColumns,
+                          matchFilterValues: newColumns.length > 0 && Object.keys(filteredNewValues).some(col => filteredNewValues[col] != null) ? {} : matchFilterValues,
+                          matchDisplayColumns: newColumns.length > 0 && Object.keys(filteredNewValues).some(col => filteredNewValues[col] != null) ? [] : matchDisplayColumns,
+                          matchDisplayValues: newColumns.length > 0 && Object.keys(filteredNewValues).some(col => filteredNewValues[col] != null) ? {} : matchDisplayValues,
                           csvFilterColumns: newColumns,
                           csvFilterValues: filteredNewValues,
                           csvDisplayColumns: newDisplayColumns,
@@ -1050,7 +1041,7 @@ const ChatMain = ({
         )}
         {chat && chat.messages.length === 0 && onUpdateModel && (
           <ModelSelector
-            selectedModel={chat.model || DEFAULT_MODEL}
+            selectedModel={chat.model || (DEFAULT_MODEL || "")}
             onSelectModel={(modelId) => onUpdateModel(chat.id, modelId)}
           />
         )}
@@ -1114,6 +1105,56 @@ const ChatMain = ({
               ))}
             </div>
           )}
+          {/* Context Section Selector - always visible */}
+          <div className="mb-3 flex items-center gap-2">
+            <label className="text-sm text-muted-foreground whitespace-nowrap">Context Section:</label>
+            <div className="w-48">
+              <Select
+                value={selectedContextSectionId === null || selectedContextSectionId === undefined ? "none" : selectedContextSectionId}
+                onValueChange={(value: string) => {
+                  // "all" = null (combine all sections), "none" = "none" (no sections), otherwise = section id
+                  const newId = value === "all" ? null : value;
+                  setSelectedContextSectionId(newId);
+                  if (onUpdateFilters && chat) {
+                    onUpdateFilters(chat.id, {
+                      matchFilterColumns,
+                      matchFilterValues,
+                      matchDisplayColumns,
+                      matchDisplayValues,
+                      csvFilterColumns,
+                      csvFilterValues,
+                      csvDisplayColumns,
+                      csvDisplayValues,
+                      selectedCsvIds,
+                      selectedContextSectionId: newId,
+                    });
+                  }
+                }}
+                disabled={contextSections.length === 0}
+              >
+                <SelectTrigger className="h-9 bg-secondary">
+                  <SelectValue placeholder={contextSections.length === 0 ? "No context sections" : "Context Section"} />
+                </SelectTrigger>
+                <SelectContent>
+                  {contextSections.length > 0 ? (
+                    <>
+                      <SelectItem value="all">All Sections</SelectItem>
+                      <SelectItem value="none">None</SelectItem>
+                      {contextSections.map((section) => (
+                        <SelectItem key={section.id} value={section.id}>
+                          {section.title || `Section ${section.id}`}
+                        </SelectItem>
+                      ))}
+                    </>
+                  ) : (
+                    <SelectItem value="none" disabled>
+                      Configure in Settings
+                    </SelectItem>
+                  )}
+                </SelectContent>
+              </Select>
+            </div>
+          </div>
           <div className="flex gap-2 items-end">
             <input
               ref={fileInputRef}

@@ -15,6 +15,7 @@ export const API_PROVIDERS: ApiProvider[] = [
     category: 'free',
     apiKeyUrl: 'https://openrouter.ai/settings/keys',
     models: [
+      'x-ai/grok-4.1-fast',
       'openrouter/sherlock-think-alpha',
       'tngtech/deepseek-r1t2-chimera:free',
       'openrouter/sherlock-dash-alpha',

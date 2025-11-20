@@ -2,6 +2,7 @@ import { useState, useRef, useEffect } from "react";
 import { X, Search, Eye, Group } from "lucide-react";
 import { Input } from "@/components/ui/input";
 import { Button } from "@/components/ui/button";
+import { cn } from "@/lib/utils";
 
 interface MultiSelectGroupByProps {
   availableColumns: { value: string; label: string }[];
@@ -17,6 +18,7 @@ interface MultiSelectGroupByProps {
   placeholder?: string;
   groupedRowsWithDisplay?: Array<{groupValues: Record<string, string>, displayValues: Record<string, string>}>;
   dataSourceKey?: string; // Key that changes when data source (CSVs) changes, to trigger reload
+  disabled?: boolean; // Disable when another data source is selected
 }
 
 const VALUES_PER_PAGE = 15;
@@ -34,7 +36,8 @@ const MultiSelectGroupBy = ({
   getCombinedGroupValues,
   placeholder = "Group by...",
   groupedRowsWithDisplay,
-  dataSourceKey
+  dataSourceKey,
+  disabled = false
 }: MultiSelectGroupByProps) => {
   const [showList, setShowList] = useState(false);
   
@@ -217,6 +220,8 @@ const MultiSelectGroupBy = ({
   }, [searchQuery]);
 
   const handleToggle = (colValue: string, e?: React.MouseEvent) => {
+    if (disabled) return; // Don't allow changes when disabled
+    
     if (e) {
       e.stopPropagation();
       e.preventDefault();
@@ -243,6 +248,8 @@ const MultiSelectGroupBy = ({
   };
 
   const handleRemove = (colValue: string, e: React.MouseEvent) => {
+    if (disabled) return; // Don't allow changes when disabled
+    
     e.preventDefault();
     e.stopPropagation();
     if (e.nativeEvent && e.nativeEvent.stopImmediatePropagation) {
@@ -293,6 +300,8 @@ const MultiSelectGroupBy = ({
   };
 
   const handleValueSelect = (value: string, e?: React.MouseEvent) => {
+    if (disabled) return; // Don't allow changes when disabled
+    
     // Stop propagation to prevent click-outside handler from closing dropdown before selection
     if (e) {
       e.stopPropagation();
@@ -368,8 +377,12 @@ const MultiSelectGroupBy = ({
       {/* Column selection button */}
       <button
         type="button"
-        onClick={() => setShowList(!showList)}
-        className="w-full px-3 h-9 text-left text-sm border rounded bg-secondary hover:bg-accent flex items-center justify-between"
+        onClick={() => !disabled && setShowList(!showList)}
+        disabled={disabled}
+        className={cn(
+          "w-full px-3 h-9 text-left text-sm border rounded bg-secondary flex items-center justify-between",
+          disabled ? "opacity-50 cursor-not-allowed" : "hover:bg-accent"
+        )}
       >
         <span>
           {groupColumns.length === 0 
