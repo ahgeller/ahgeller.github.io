@@ -1178,7 +1178,7 @@ const ChatMain = ({
                 onChange={(e) => setInput(e.target.value)}
                 onKeyDown={handleKeyDown}
                 onPaste={handlePaste}
-                placeholder="Ask about volleyball analytics... (Paste images with Ctrl+V)"
+                placeholder="Ask about your data... (Paste images with Ctrl+V)"
                 className={cn(
                   "min-h-[60px] max-h-[200px] resize-none bg-secondary border-border/50 focus:border-primary",
                   ((supportsReasoning && onUpdateReasoning) || onUpdateVolleyballContext) ? "pr-48" : "pr-2"
