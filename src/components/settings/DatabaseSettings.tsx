@@ -132,6 +132,7 @@ const DatabaseSettings = ({ isOpen, onClose }: DatabaseSettingsProps) => {
   const [codingRules, setCodingRules] = useState<CodingRules>({ id: "coding-rules", content: "" });
   const [csvFiles, setCsvFiles] = useState<CSVFile[]>([]);
   const [valueInfos, setValueInfos] = useState<ValueInfo[]>([]);
+  const [isSavingContextSections, setIsSavingContextSections] = useState(false);
   const fileInputRef = useRef<HTMLInputElement>(null);
 
   useEffect(() => {
@@ -436,11 +437,21 @@ Always query ALL rows - never sample or estimate.`;
     alert("Table name saved successfully!");
   };
 
-  const handleSaveContextSections = () => {
-    localStorage.setItem("db_context_sections", JSON.stringify(contextSections));
-    // Dispatch custom event to notify other components
-    window.dispatchEvent(new Event('contextSectionsUpdated'));
-    alert("Context sections saved successfully!");
+  const handleSaveContextSections = async () => {
+    setIsSavingContextSections(true);
+    try {
+      // Simulate a brief delay for better UX feedback
+      await new Promise(resolve => setTimeout(resolve, 300));
+      localStorage.setItem("db_context_sections", JSON.stringify(contextSections));
+      // Dispatch custom event to notify other components
+      window.dispatchEvent(new Event('contextSectionsUpdated'));
+      alert("Context sections saved successfully!");
+    } catch (error) {
+      console.error("Error saving context sections:", error);
+      alert("Failed to save context sections. Please try again.");
+    } finally {
+      setIsSavingContextSections(false);
+    }
   };
 
   const handleSaveCodingRules = () => {
@@ -449,7 +460,7 @@ Always query ALL rows - never sample or estimate.`;
   };
 
   const handleResetContextSections = () => {
-    if (confirm("Reset context sections to defaults? This will replace your current context sections with the default volleyball context.")) {
+    if (confirm("Reset 'Volleyball Context' section to default? This will only reset the Volleyball Context section and keep all your custom sections.")) {
       const defaultContext = `You are an expert volleyball analyst helping the University of California, San Diego (UCSD) volleyball team. Always consider UCSD's perspective.
 
 Instructions:
@@ -476,15 +487,34 @@ VOLLEYBALL DATA UNDERSTANDING:
 
 - Zones 1-9 represent court positions (1=right back, 2=right front, 3=middle front , 4=left front, 5=back left , 6=back middle, 7 = left middle, 8 = middle middle, 9 = right middle) (first word refers to x-position, second word refers to y-position)`;
 
-      const defaultSections = [{ 
-        id: Date.now().toString(), 
-        title: "Volleyball Context", 
-        content: defaultContext 
-      }];
+      // Find the "Volleyball Context" section if it exists, or create a new one
+      const volleyballContextIndex = contextSections.findIndex(section => section.title === "Volleyball Context");
+      
+      let updatedSections: ContextSection[];
+      
+      if (volleyballContextIndex >= 0) {
+        // Update existing "Volleyball Context" section
+        updatedSections = [...contextSections];
+        updatedSections[volleyballContextIndex] = {
+          ...updatedSections[volleyballContextIndex],
+          content: defaultContext
+        };
+      } else {
+        // Add "Volleyball Context" section if it doesn't exist, keeping all other sections
+        updatedSections = [
+          { 
+            id: Date.now().toString(), 
+            title: "Volleyball Context", 
+            content: defaultContext 
+          },
+          ...contextSections
+        ];
+      }
 
-      setContextSections(defaultSections);
-      localStorage.setItem("db_context_sections", JSON.stringify(defaultSections));
-      alert("Context sections reset to defaults!");
+      setContextSections(updatedSections);
+      localStorage.setItem("db_context_sections", JSON.stringify(updatedSections));
+      window.dispatchEvent(new Event('contextSectionsUpdated'));
+      alert("Volleyball Context section reset to default!");
     }
   };
 
@@ -851,7 +881,13 @@ Always query ALL rows - never sample or estimate.`;
                 </div>
               ))}
             </div>
-            <Button onClick={handleSaveContextSections} className="mt-2">Save Context Sections</Button>
+            <Button 
+              onClick={handleSaveContextSections} 
+              className="mt-2"
+              disabled={isSavingContextSections}
+            >
+              {isSavingContextSections ? "Saving..." : "Save Context Sections"}
+            </Button>
           </div>
 
           <div className="flex justify-end gap-2">

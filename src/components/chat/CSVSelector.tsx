@@ -192,8 +192,6 @@ const CSVSelector = ({ selectedCsvIds, selectedFilterColumns, selectedFilterValu
     }
   };
 
-  const selectedFiles = csvFiles.filter(f => selectedCsvIds.includes(f.id));
-  
   // Filter CSV files based on search query
   useEffect(() => {
     if (!fileSearchQuery.trim()) {
@@ -656,11 +654,7 @@ const CSVSelector = ({ selectedCsvIds, selectedFilterColumns, selectedFilterValu
     const hasGroupValues = Object.keys(newValues).some(col => newValues[col] != null && groupColumns.includes(col));
     if (hasGroupValues && groupColumns.length > 0 && selectedCsvIds.length > 0) {
       try {
-        const { generateValueInfoFromData, saveValueInfo, deleteValueInfo } = await import("@/lib/chatApi");
-        
-        // Delete old current_selection for this chat to avoid stale data
-        // Note: deleteValueInfo doesn't filter by chatId, but saveValueInfo will update it
-        // We'll let saveValueInfo handle the update
+        const { generateValueInfoFromData, saveValueInfo } = await import("@/lib/chatApi");
         
         // Get filtered CSV data from selected CSVs
         const csvData = await getCsvFileData(selectedCsvIds, groupColumns, newValues);

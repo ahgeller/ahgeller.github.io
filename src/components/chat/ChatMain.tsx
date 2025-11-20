@@ -5,7 +5,7 @@ import { Textarea } from "@/components/ui/textarea";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { useToast } from "@/hooks/use-toast";
 import { Chat, Message, MatchData } from "@/types/chat";
-import { sendChatMessage, DEFAULT_MODEL, getValueInfo, autoInspectData, getCsvFileData } from "@/lib/chatApi";
+import { sendChatMessage, DEFAULT_MODEL, getValueInfo } from "@/lib/chatApi";
 import { loadMatchData, isDatabaseConnected } from "@/lib/database";
 import ChatMessage from "./ChatMessage";
 import MatchSelector from "./MatchSelector";
@@ -67,44 +67,6 @@ const ChatMain = ({
   const [selectedContextSectionId, setSelectedContextSectionId] = useState<string | null>("none");
   const [contextSections, setContextSections] = useState<Array<{id: string, title: string, content: string}>>([]);
   const [dbConnected, setDbConnected] = useState(false);
-  const [hasCsvFiles, setHasCsvFiles] = useState(false);
-  
-  // Check for CSV files and listen for changes
-  useEffect(() => {
-    const checkCsvFiles = () => {
-      try {
-        const saved = localStorage.getItem("db_csv_files");
-        if (saved) {
-          const parsed = JSON.parse(saved);
-          const files = Array.isArray(parsed) ? parsed : [];
-          // Check if any files have headers (columns available)
-          const hasColumns = files.some((f: any) => f.headers && Array.isArray(f.headers) && f.headers.length > 0);
-          setHasCsvFiles(files.length > 0 && hasColumns);
-        } else {
-          setHasCsvFiles(false);
-        }
-      } catch (e) {
-        setHasCsvFiles(false);
-      }
-    };
-    
-    checkCsvFiles();
-    
-    // Listen for storage changes
-    const handleStorageChange = (e: StorageEvent) => {
-      if (e.key === 'db_csv_files') {
-        checkCsvFiles();
-      }
-    };
-    
-    window.addEventListener('storage', handleStorageChange);
-    const interval = setInterval(checkCsvFiles, 1000);
-    
-    return () => {
-      window.removeEventListener('storage', handleStorageChange);
-      clearInterval(interval);
-    };
-  }, []);
   
   // Check database connection status and listen for changes
   useEffect(() => {
@@ -144,14 +106,11 @@ const ChatMain = ({
         if (saved) {
           const parsed = JSON.parse(saved);
           if (Array.isArray(parsed) && parsed.length > 0) {
-            console.log('ChatMain: Loaded context sections:', parsed.length);
             setContextSections(parsed);
           } else {
-            console.log('ChatMain: No context sections found or empty array');
             setContextSections([]);
           }
         } else {
-          console.log('ChatMain: No context sections in localStorage');
           setContextSections([]);
         }
       } catch (e) {
@@ -175,13 +134,9 @@ const ChatMain = ({
     window.addEventListener('storage', handleStorageChange);
     window.addEventListener('contextSectionsUpdated', handleContextSectionsUpdate);
     
-    // Also check periodically in case of same-window updates (faster polling)
-    const interval = setInterval(loadContextSections, 500);
-    
     return () => {
       window.removeEventListener('storage', handleStorageChange);
       window.removeEventListener('contextSectionsUpdated', handleContextSectionsUpdate);
-      clearInterval(interval);
     };
   }, []);
   

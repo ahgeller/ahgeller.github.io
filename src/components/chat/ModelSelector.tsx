@@ -14,6 +14,7 @@ interface ModelSelectorProps {
 const ModelSelector = ({ selectedModel, onSelectModel, showWhenEmpty = true }: ModelSelectorProps) => {
   const currentModel = selectedModel || "";
   const [availableModels, setAvailableModels] = useState(getAvailableModelsFormat());
+  const [loadingModelId, setLoadingModelId] = useState<string | null>(null);
 
   // Reload models when they might have changed
   useEffect(() => {
@@ -61,31 +62,55 @@ const ModelSelector = ({ selectedModel, onSelectModel, showWhenEmpty = true }: M
         const hasKey = modelHasApiKey(model.id);
         const isDisabled = model.disabled || !hasKey;
         
+        const isLoading = loadingModelId === model.id;
+        
         return (
           <Button
             key={model.id}
             variant={currentModel === model.id ? "default" : "outline"}
             size="sm"
-            onClick={() => !isDisabled && onSelectModel(model.id)}
-            disabled={isDisabled}
+            onClick={async () => {
+              if (!isDisabled && !isLoading) {
+                setLoadingModelId(model.id);
+                try {
+                  // Brief delay for visual feedback
+                  await new Promise(resolve => setTimeout(resolve, 200));
+                  onSelectModel(model.id);
+                } finally {
+                  setLoadingModelId(null);
+                }
+              }
+            }}
+            disabled={isDisabled || isLoading}
             className={cn(
               "text-xs",
               currentModel === model.id && "bg-primary text-primary-foreground",
               model.free && "border-primary/50",
-              isDisabled && "opacity-50 cursor-not-allowed"
+              (isDisabled || isLoading) && "opacity-50 cursor-not-allowed"
             )}
             title={
               isDisabled 
                 ? (model.disabled ? "Model is currently down" : "API key required")
+                : isLoading
+                ? "Selecting model..."
                 : (provider ? `${provider.name} - ${model.name}` : model.name)
             }
           >
-            {model.name}
-            {!model.free && !isDisabled && (
-              <span className="ml-1 text-[10px] opacity-75">$</span>
-            )}
-            {model.disabled && (
-              <span className="ml-1 text-[10px] opacity-75">(Down)</span>
+            {isLoading ? (
+              <span className="flex items-center gap-1.5">
+                <span className="inline-block w-3 h-3 border-2 border-current border-t-transparent rounded-full animate-spin"></span>
+                <span>Selecting...</span>
+              </span>
+            ) : (
+              <>
+                {model.name}
+                {!model.free && !isDisabled && (
+                  <span className="ml-1 text-[10px] opacity-75">$</span>
+                )}
+                {model.disabled && (
+                  <span className="ml-1 text-[10px] opacity-75">(Down)</span>
+                )}
+              </>
             )}
           </Button>
         );
