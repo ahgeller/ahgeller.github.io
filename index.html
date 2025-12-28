@@ -1,0 +1,58 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover" />
+    <title>Ai Analytics</title>
+    <style>
+      html, body {
+        margin: 0;
+        padding: 0;
+        width: 100%;
+        height: 100%;
+        overflow: hidden;
+      }
+
+      /* REQUIRED so height actually fills correctly */
+      html, body, #root {
+        min-height: 100%;
+      }
+
+      /* Fix for mobile browsers - use dynamic viewport height */
+      @supports (height: 100dvh) {
+        html, body, #root {
+          height: 100dvh;
+          min-height: 100dvh;
+        }
+      }
+
+      /* Prevent iOS rubber band scrolling */
+      body {
+        position: fixed;
+        width: 100%;
+      }
+
+      /* Scaling - only apply to desktop */
+      @media (min-width: 1024px) {
+        #root {
+          transform: scale(0.8);
+          transform-origin: top left;
+          width: calc(100vw / 0.8);
+          height: calc(100vh / 0.8);
+        }
+      }
+
+
+    </style>
+    <script src="https://js.puter.com/v2/"></script>
+    <script type="module">
+      // Cloudflare D1 is used instead of Neon
+      // Database queries are handled via API endpoints in functions/api/db.ts
+    </script>
+  </head>
+  <body>
+    <div id="root"></div>
+    <script type="module" src="/src/main.tsx"></script>
+  </body>
+</html>
+
