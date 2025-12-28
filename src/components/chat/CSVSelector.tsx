@@ -55,10 +55,19 @@ const CSVSelector = ({ selectedCsvIds, selectedFilterColumns, selectedFilterValu
   const CACHE_DURATION = 5 * 60 * 1000; // 5 minutes
   const [displayValuesState, setDisplayValuesState] = useState<Record<string, string | null>>({});
   // Persist upload status across chat navigation
-  const [uploadStatus, setUploadStatus] = useState<{ status: 'idle' | 'reading' | 'parsing' | 'saving' | 'verifying' | 'success' | 'error', message?: string, fileName?: string }>(() => {
+  const [uploadStatus, setUploadStatus] = useState<{ status: 'idle' | 'reading' | 'parsing' | 'saving' | 'verifying' | 'success' | 'error', message?: string, fileName?: string, percent?: number, timestamp?: number }>(() => {
     try {
       const saved = sessionStorage.getItem('csv_upload_status');
-      return saved ? JSON.parse(saved) : { status: 'idle' };
+      if (saved) {
+        const parsed = JSON.parse(saved);
+        // Clear stale statuses (older than 30 seconds - likely from crashed/interrupted uploads)
+        if (parsed.timestamp && Date.now() - parsed.timestamp > 30000) {
+          sessionStorage.removeItem('csv_upload_status');
+          return { status: 'idle' };
+        }
+        return parsed;
+      }
+      return { status: 'idle' };
     } catch {
       return { status: 'idle' };
     }
@@ -70,7 +79,10 @@ const CSVSelector = ({ selectedCsvIds, selectedFilterColumns, selectedFilterValu
       if (uploadStatus.status === 'idle') {
         sessionStorage.removeItem('csv_upload_status');
       } else {
-        sessionStorage.setItem('csv_upload_status', JSON.stringify(uploadStatus));
+        sessionStorage.setItem('csv_upload_status', JSON.stringify({
+          ...uploadStatus,
+          timestamp: Date.now()
+        }));
       }
     } catch (error) {
       console.warn('Failed to persist upload status:', error);
@@ -333,6 +345,7 @@ const CSVSelector = ({ selectedCsvIds, selectedFilterColumns, selectedFilterValu
                 status: 'parsing',
                 message: progress.message || `Processing ${progress.percent.toFixed(1)}%`,
                 fileName: progress.file,
+                percent: progress.percent,
               });
             }, csvFileId);
           } else if (fileExtension === 'xlsx' || fileExtension === 'xls') {
@@ -341,6 +354,7 @@ const CSVSelector = ({ selectedCsvIds, selectedFilterColumns, selectedFilterValu
                 status: 'parsing',
                 message: progress.message || `Processing ${progress.percent.toFixed(1)}%`,
                 fileName: progress.file,
+                percent: progress.percent,
               });
             }, csvFileId);
           } else if (fileExtension === 'json') {
@@ -349,6 +363,7 @@ const CSVSelector = ({ selectedCsvIds, selectedFilterColumns, selectedFilterValu
                 status: 'parsing',
                 message: progress.message || `Processing ${progress.percent.toFixed(1)}%`,
                 fileName: progress.file,
+                percent: progress.percent,
               });
             }, csvFileId);
           } else {
@@ -358,6 +373,7 @@ const CSVSelector = ({ selectedCsvIds, selectedFilterColumns, selectedFilterValu
                 status: 'parsing',
                 message: progress.message || `Processing ${progress.percent.toFixed(1)}%`,
                 fileName: progress.file,
+                percent: progress.percent,
               });
             }, csvFileId);
           }
@@ -2225,7 +2241,7 @@ const CSVSelector = ({ selectedCsvIds, selectedFilterColumns, selectedFilterValu
               </div>
 
               {/* Status text */}
-              <div className="flex-1 min-w-0 space-y-1">
+              <div className="flex-1 min-w-0 space-y-2">
                 <div className="text-sm font-medium text-foreground">
                   {isFinalizing ? finalizeProgress :
                    isInitializingDuckDB ? 'Initializing Database' :
@@ -2243,7 +2259,21 @@ const CSVSelector = ({ selectedCsvIds, selectedFilterColumns, selectedFilterValu
                     {uploadStatus.fileName}
                   </div>
                 )}
-                {!uploadStatus.message && uploadStatus.status !== 'idle' && (
+                {/* Progress bar */}
+                {uploadStatus.percent !== undefined && uploadStatus.status === 'parsing' && (
+                  <div className="space-y-1">
+                    <div className="w-full bg-secondary rounded-full h-2 overflow-hidden">
+                      <div
+                        className="bg-primary h-full transition-all duration-300 ease-out rounded-full"
+                        style={{ width: `${Math.min(100, Math.max(0, uploadStatus.percent))}%` }}
+                      />
+                    </div>
+                    <div className="text-xs text-muted-foreground text-right">
+                      {uploadStatus.percent.toFixed(0)}%
+                    </div>
+                  </div>
+                )}
+                {!uploadStatus.message && uploadStatus.status !== 'idle' && !uploadStatus.percent && (
                   <div className="text-xs text-muted-foreground">Please wait...</div>
                 )}
               </div>
