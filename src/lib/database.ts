@@ -1,12 +1,6 @@
 // Database utilities for Cloudflare R2 + Workers query layer
 // Architecture: R2 caches JSON responses, Workers query Neon Postgres if cache miss
 
-declare global {
-  interface Window {
-    puter?: any;
-  }
-}
-
 export interface Match {
   match_id: string;
   home_team: string;
