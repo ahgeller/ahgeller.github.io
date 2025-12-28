@@ -2343,10 +2343,10 @@ const CSVSelector = ({ selectedCsvIds, selectedFilterColumns, selectedFilterValu
           >
             <FileText className="h-4 w-4 mr-2" />
             {selectedCsvIds.length > 0
-              ? `${selectedCsvIds.length} CSV${selectedCsvIds.length > 1 ? 's' : ''} selected`
+              ? `${selectedCsvIds.length} file${selectedCsvIds.length > 1 ? 's' : ''} selected`
               : csvFiles.length === 0
-              ? "No CSV files"
-              : "Select CSVs to combine"}
+              ? "No data files"
+              : "Select files to combine"}
           </Button>
 
           {isOpen && buttonRect && typeof document !== 'undefined' && createPortal(
@@ -2431,7 +2431,7 @@ const CSVSelector = ({ selectedCsvIds, selectedFilterColumns, selectedFilterValu
                               <span className="truncate" style={{ fontSize: '13px' }}>{file.name}</span>
                             </div>
                             <span className="text-muted-foreground ml-2 flex-shrink-0" style={{ fontSize: '11px' }}>
-                              ({(file.rowCount ?? file.data?.length ?? 0).toLocaleString()} rows, {file.headers.length} cols)
+                              ({(file.rowCount ?? file.data?.length ?? 0).toLocaleString()} rows, {file.headers.length} cols • Parquet)
                             </span>
                           </div>
                         </button>

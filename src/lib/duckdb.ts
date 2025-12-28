@@ -358,8 +358,8 @@ export async function initDuckDB() {
       throw new Error('No DuckDB bundles available');
     }
     
-    // Select the 'mvp' bundle (smaller, faster to compile than 'eh')
-    const bundle = bundleArray.find((b: any) => b?.name === 'mvp') || bundleArray[0];
+    // Select the 'eh' bundle (best for modern browsers, faster queries)
+    const bundle = bundleArray.find((b: any) => b?.name === 'eh') || bundleArray[0];
     
     if (!bundle) {
       throw new Error('No valid DuckDB bundle found');
@@ -385,10 +385,9 @@ export async function initDuckDB() {
       };
     }
 
-    // MVP bundle must be served locally for best performance (not from CDN)
-    // Using 'mvp' bundle - smaller and faster to compile than 'eh'
-    const workerURL = '/duckdb-browser-mvp.worker.js';
-    const wasmURL = '/duckdb-mvp.wasm';
+    // EH bundle for faster queries - uses modern CPU features (SIMD, etc.)
+    const workerURL = '/duckdb-browser-eh.worker.js';
+    const wasmURL = '/duckdb-eh.wasm';
 
     if (!workerURL) {
       throw new Error(`DuckDB worker file missing`);
@@ -421,13 +420,20 @@ export async function initDuckDB() {
     // Instantiate with WASM URL
     await db.instantiate(wasmURL);
 
-    // Skip OPFS persistence - we use IndexedDB for storage instead
-    // OPFS requires downloading extensions which can be slow/fail
-    DEBUG && console.log('🗂️ DuckDB using in-memory mode (data persisted via IndexedDB)');
+    // Open (or create) a persistent database in OPFS so tables survive reloads
+    try {
+      await (db as any).open({ path: 'opfs:/duckdb/main.db' });
+      DEBUG && console.log('🗂️ DuckDB opened with OPFS persistence at opfs:/duckdb/main.db');
+    } catch (openErr) {
+      console.warn('DuckDB OPFS open failed, continuing with in-memory DB:', openErr);
+    }
 
     // Configure DuckDB for virtual file-based processing
     try {
       const conn = await db.connect();
+
+      // Set temp directory to OPFS for spilling to disk
+      await conn.query("SET temp_directory='opfs:/duckdb/temp'");
 
       // Relaxed memory limit since we're not materializing tables
       await conn.query("SET memory_limit='6GB'");
@@ -653,14 +659,15 @@ export async function processCSVWithDuckDB(
 
         DEBUG && console.log(`📦 Converting CSV to Parquet: ${safeFileName} → ${safeParquetName}`);
 
-        // Stream CSV directly to Parquet (no intermediate table - saves memory!)
+        // Stream CSV directly to Parquet in OPFS (no intermediate table - saves memory!)
         const escapedCsvFileName = safeFileName.replace(/'/g, "''");
         const escapedParquetName = safeParquetName.replace(/'/g, "''");
+        const opfsParquetPath = `opfs:/duckdb/${escapedParquetName}`;
 
         await conn.query(`
           COPY (
             SELECT * FROM read_csv('${escapedCsvFileName}', header=true, auto_detect=true, ignore_errors=true, sample_size=-1)
-          ) TO '${escapedParquetName}' (FORMAT PARQUET, COMPRESSION 'ZSTD')
+          ) TO '${opfsParquetPath}' (FORMAT PARQUET, COMPRESSION 'ZSTD')
         `);
 
         DEBUG && console.log(`✅ Parquet file created in OPFS (compressed)`);
@@ -671,7 +678,7 @@ export async function processCSVWithDuckDB(
         await conn.query(`DROP TABLE IF EXISTS "${escapedTableName}"`);
         await conn.query(`
           CREATE TABLE "${escapedTableName}" AS
-          SELECT * FROM read_parquet('${escapedParquetName}')
+          SELECT * FROM read_parquet('${opfsParquetPath}')
         `);
 
         DEBUG && console.log(`✅ Table created from Parquet`);
