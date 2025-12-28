@@ -422,20 +422,13 @@ export async function initDuckDB() {
     // Instantiate with WASM URL
     await db.instantiate(wasmURL);
 
-    // Open (or create) a persistent database in OPFS so tables survive reloads
-    try {
-      await (db as any).open({ path: 'opfs:/duckdb/main.db' });
-      DEBUG && console.log('🗂️ DuckDB opened with OPFS persistence at opfs:/duckdb/main.db');
-    } catch (openErr) {
-      console.warn('DuckDB OPFS open failed, continuing with in-memory DB:', openErr);
-    }
+    // Skip OPFS persistence - we use IndexedDB for storage instead
+    // OPFS requires downloading extensions which can be slow/fail
+    DEBUG && console.log('🗂️ DuckDB using in-memory mode (data persisted via IndexedDB)');
 
     // Configure DuckDB for virtual file-based processing
     try {
       const conn = await db.connect();
-
-      // Set temp directory to OPFS for spilling to disk
-      await conn.query("SET temp_directory='opfs:/duckdb/temp'");
 
       // Relaxed memory limit since we're not materializing tables
       await conn.query("SET memory_limit='6GB'");
