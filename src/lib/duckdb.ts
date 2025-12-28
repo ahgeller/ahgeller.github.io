@@ -385,14 +385,12 @@ export async function initDuckDB() {
       };
     }
 
-    // Use local paths instead of CDN URLs
-    // Workers cannot be loaded from CDN due to CORS restrictions
-    // Files should be copied to public folder during build
+    // Worker and WASM must match the same bundle (eh)
     const workerURL = '/duckdb-browser-eh.worker.js';
     const wasmURL = '/duckdb-eh.wasm';
-    
-    if (!workerURL || !wasmURL) {
-      throw new Error(`DuckDB bundle missing required URLs. Worker: ${!!workerURL}, WASM: ${!!wasmURL}`);
+
+    if (!workerURL) {
+      throw new Error(`DuckDB worker file missing`);
     }
 
     DEBUG && console.log('🔧 Initializing DuckDB with AsyncDuckDB pattern...', { workerURL, wasmURL });
