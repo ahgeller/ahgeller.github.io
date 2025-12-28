@@ -60,11 +60,20 @@ const CSVSelector = ({ selectedCsvIds, selectedFilterColumns, selectedFilterValu
       const saved = sessionStorage.getItem('csv_upload_status');
       if (saved) {
         const parsed = JSON.parse(saved);
-        // Clear stale statuses (older than 30 seconds - likely from crashed/interrupted uploads)
+
+        // Clear any in-progress statuses - if we're mounting fresh, the upload process has stopped
+        const inProgressStatuses = ['reading', 'parsing', 'saving', 'verifying'];
+        if (inProgressStatuses.includes(parsed.status)) {
+          sessionStorage.removeItem('csv_upload_status');
+          return { status: 'idle' };
+        }
+
+        // Clear stale statuses (older than 30 seconds)
         if (parsed.timestamp && Date.now() - parsed.timestamp > 30000) {
           sessionStorage.removeItem('csv_upload_status');
           return { status: 'idle' };
         }
+
         return parsed;
       }
       return { status: 'idle' };
