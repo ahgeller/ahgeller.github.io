@@ -313,12 +313,13 @@ const Index = () => {
     }
   };
   
-  // Clean up valueInfos on mount to remove orphaned data
-  useEffect(() => {
-    if (isAuthenticated) {
-      cleanupValueInfosForDeletedChats();
-    }
-  }, [isAuthenticated]);
+  // Cleanup is already handled when deleting chats (line 282)
+  // Don't run on mount - causes race condition where chats haven't loaded yet
+  // useEffect(() => {
+  //   if (isAuthenticated) {
+  //     cleanupValueInfosForDeletedChats();
+  //   }
+  // }, [isAuthenticated]);
 
   const updateChatMessages = (chatId: string, messages: Message[] | ((prev: Message[]) => Message[])) => {
     setChats((prevChats) =>
