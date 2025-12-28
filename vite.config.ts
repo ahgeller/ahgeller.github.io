@@ -16,8 +16,8 @@ const copyDuckDBFiles = () => {
       }
       
       const files = [
-        'duckdb-eh.wasm',
-        'duckdb-browser-eh.worker.js'
+        'duckdb-mvp.wasm',
+        'duckdb-browser-mvp.worker.js'
       ];
       
       files.forEach(file => {

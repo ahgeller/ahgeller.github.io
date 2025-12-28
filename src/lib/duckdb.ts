@@ -358,8 +358,8 @@ export async function initDuckDB() {
       throw new Error('No DuckDB bundles available');
     }
     
-    // Select the 'eh' bundle (best for modern browsers)
-    const bundle = bundleArray.find((b: any) => b?.name === 'eh') || bundleArray[0];
+    // Select the 'mvp' bundle (smaller, faster to compile than 'eh')
+    const bundle = bundleArray.find((b: any) => b?.name === 'mvp') || bundleArray[0];
     
     if (!bundle) {
       throw new Error('No valid DuckDB bundle found');
@@ -385,9 +385,10 @@ export async function initDuckDB() {
       };
     }
 
-    // Worker and WASM must match the same bundle (eh)
-    const workerURL = '/duckdb-browser-eh.worker.js';
-    const wasmURL = '/duckdb-eh.wasm';
+    // MVP bundle must be served locally for best performance (not from CDN)
+    // Using 'mvp' bundle - smaller and faster to compile than 'eh'
+    const workerURL = '/duckdb-browser-mvp.worker.js';
+    const wasmURL = '/duckdb-mvp.wasm';
 
     if (!workerURL) {
       throw new Error(`DuckDB worker file missing`);
