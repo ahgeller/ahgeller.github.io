@@ -1465,24 +1465,23 @@ const ChatMain = ({
                         
                         let data: any[] = [];
                         const totalRows = selectedFile.rowCount || 0;
-                        
+
                         try {
                           // Try to get filtered data if filters are applied
                           const filterCols = [...csvFilterColumns, ...csvDisplayColumns];
                           const hasFilters = filterCols.length > 0 && Object.keys(csvFilterValues).some(col => csvFilterValues[col] != null);
-                          
+
                           if (hasFilters) {
                             const { queryCSVWithDuckDB } = await import('@/lib/duckdb');
                             // Load filtered data (limited) - search can find more
                             const fullData = await queryCSVWithDuckDB(selectedCsvIds[0], filterCols, csvFilterValues);
                             data = fullData?.slice(0, 500) || [];
                           } else {
-                            // Load first 500 rows for fast initial display
-                            // DataPreview will load more on-demand via DuckDB
-                            const { executeDuckDBSql, isDuckDBInitialized } = await import('@/lib/duckdb');
+                            // FAST: Query directly from OPFS Parquet - skips IndexedDB loading
+                            const { queryParquetDirect, isDuckDBInitialized } = await import('@/lib/duckdb');
                             if (isDuckDBInitialized()) {
                               try {
-                                data = await executeDuckDBSql(selectedCsvIds[0], 'SELECT * FROM csvData LIMIT 500') || [];
+                                data = await queryParquetDirect(selectedCsvIds[0], 500) || [];
                               } catch {
                                 data = await getCsvDataRows(selectedFile, undefined, true);
                                 data = data.slice(0, 500);

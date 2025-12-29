@@ -1475,6 +1475,65 @@ export async function queryCSVWithDuckDB(
 
 // Execute raw SQL query on DuckDB CSV table
 // Execute raw SQL query on DuckDB CSV table
+/**
+ * Fast preview query - reads directly from OPFS Parquet without loading from IndexedDB
+ * Use this for quick data previews to avoid slow IndexedDB blob loading
+ */
+export async function queryParquetDirect(
+  csvId: string,
+  limit: number = 500,
+  whereClause?: string,
+  orderBy?: string
+): Promise<any[]> {
+  const db = await initDuckDB();
+  const conn = await db.connect();
+
+  // Construct OPFS Parquet path (csvId already has csv- prefix, just clean it)
+  const parquetName = `${csvId.replace(/[^a-zA-Z0-9]/g, '_')}.parquet`;
+  const opfsPath = `opfs:/duckdb/${parquetName}`;
+
+  // Build SQL query
+  let sql = `SELECT * FROM read_parquet('${opfsPath}')`;
+  if (whereClause) {
+    sql += ` WHERE ${whereClause}`;
+  }
+  if (orderBy) {
+    sql += ` ORDER BY ${orderBy}`;
+  }
+  sql += ` LIMIT ${limit}`;
+
+  try {
+    // Query directly from Parquet - no IndexedDB loading needed
+    const result = await conn.query(sql);
+    return result.toArray().map((row: any) => row.toJSON());
+  } catch (error: any) {
+    // Fallback: Try querying from table if it exists (still faster than IndexedDB)
+    try {
+      // Don't add csv_ prefix - csvId already has it
+      const tableName = csvId.replace(/[^a-zA-Z0-9]/g, '_');
+      const escapedTableName = tableName.replace(/"/g, '""');
+
+      // Build SQL with table instead of Parquet
+      let tableSql = `SELECT * FROM "${escapedTableName}"`;
+      if (whereClause) {
+        tableSql += ` WHERE ${whereClause}`;
+      }
+      if (orderBy) {
+        tableSql += ` ORDER BY ${orderBy}`;
+      }
+      tableSql += ` LIMIT ${limit}`;
+
+      const result = await conn.query(tableSql);
+      return result.toArray().map((row: any) => row.toJSON());
+    } catch (tableError: any) {
+      // Both Parquet and table failed - will fall back to IndexedDB
+      throw error;
+    }
+  } finally {
+    await conn.close();
+  }
+}
+
 export async function executeDuckDBSql(
   csvId: string,
   sqlQuery: string,

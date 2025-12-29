@@ -772,83 +772,8 @@ export class CodeExecutor {
         } catch (error: any) {
           const errorMsg = error?.message || 'Unknown error';
           // Extract useful info from DuckDB errors
-          if (errorMsg.includes('Catalog Error')) {
-            throw new Error(`DuckDB Error: Column or table not found.\n${errorMsg}\n\nTip: Use exact column names from the dataset. Check spelling and case sensitivity.`);
-          } else if (errorMsg.includes('Binder Error')) {
-            throw new Error(`DuckDB Error: Invalid column reference.\n${errorMsg}\n\nTip: Make sure all columns exist in the dataset.`);
-          } else if (errorMsg.includes('Parser Error')) {
-            // Special handling for PERCENTILE_CONT WITHIN GROUP syntax error
-            if (errorMsg.includes('WITHIN GROUP') || errorMsg.includes('PERCENTILE_CONT')) {
-              throw new Error(`DuckDB Error: PERCENTILE_CONT with WITHIN GROUP syntax is not supported in DuckDB WASM.\n\n❌ WRONG (PostgreSQL syntax):\nPERCENTILE_CONT(0.5) WITHIN GROUP (ORDER BY column)\n\n✅ CORRECT (DuckDB syntax):\nPERCENTILE_CONT(column, 0.5)\n\nOR use MEDIAN() function:\nMEDIAN(column)\n\nOR use QUANTILE() for percentiles:\nQUANTILE(column, 0.5)  -- for median\nQUANTILE(column, 0.25) -- for 25th percentile\nQUANTILE(column, 0.75) -- for 75th percentile`);
-            }
-            throw new Error(`DuckDB Error: SQL syntax error.\n${errorMsg}\n\nTip: Check your SQL syntax. DuckDB uses standard SQL.`);
-          } else if (errorMsg.includes('Conversion Error')) {
-            // Common issue: Trying to CAST strings with text labels to numbers
-            // Example: "< -300" or "-300:-200" can't be converted to FLOAT
-            let tip = 'Cannot convert the value to the requested type.';
-            if (errorMsg.includes('CAST') || errorMsg.includes('to FLOAT') || errorMsg.includes('to INT')) {
-              tip = 'Cannot convert string to number. When sorting categorical bins (like "< -300" or "-300 to -200"), use a separate numeric order column instead of trying to CAST the labels.';
-            }
-            
-            // CRITICAL: Show the exact solution in a way the AI CANNOT miss
-            const solution = `
-
-═══════════════════════════════════════════════════════════════
-🛑 YOU ARE USING THE WRONG PATTERN - THIS ALWAYS FAILS:
-   ORDER BY CAST(REPLACE(bin_label, ' to ', ':') AS FLOAT)
-   
-   Why it fails: Text labels like "< -300" or ">= 300" cannot convert to numbers
-═══════════════════════════════════════════════════════════════
-
-✅ CORRECT PATTERN - USE THIS EXACT APPROACH:
-
-Step 1: Create BOTH the text label AND a numeric order column in same CASE:
-
-SELECT 
-  CASE
-    WHEN column < -300 THEN '< -300'
-    WHEN column < -200 THEN '-300 to -200'
-    WHEN column < -100 THEN '-200 to -100'
-    WHEN column < 0 THEN '-100 to 0'
-    WHEN column < 100 THEN '0 to 100'
-    WHEN column < 200 THEN '100 to 200'
-    WHEN column < 300 THEN '200 to 300'
-    ELSE '>= 300'
-  END as bin_label,
-  CASE
-    WHEN column < -300 THEN 1
-    WHEN column < -200 THEN 2
-    WHEN column < -100 THEN 3
-    WHEN column < 0 THEN 4
-    WHEN column < 100 THEN 5
-    WHEN column < 200 THEN 6
-    WHEN column < 300 THEN 7
-    ELSE 8
-  END as bin_order,
-  COUNT(*) as count,
-  -- Add your other aggregations here
-FROM csvData
-GROUP BY bin_label, bin_order
-ORDER BY bin_order  -- ← Sort by NUMBER, not by text label!
-
-KEY POINTS:
-- Create bin_order column with numbers 1, 2, 3, etc.
-- Use SAME conditions for both label and order
-- ORDER BY bin_order (the numeric column)
-- NEVER try to CAST the text labels to numbers
-
-NOW: Rewrite your query using this exact pattern.
-═══════════════════════════════════════════════════════════════
-`;
-            
-            throw new Error(`${errorMsg}\n${solution}`);
-          } else if (errorMsg.includes('not loaded in DuckDB') || errorMsg.includes('not found')) {
-            throw new Error(`DuckDB Error: CSV file not properly loaded.\n${errorMsg}\n\nFix: Try re-uploading the CSV file, or use the data array directly if it contains data.`);
-          } else if (errorMsg.includes('Table') && errorMsg.includes('does not exist')) {
-            throw new Error(`DuckDB Error: Table not found.\n${errorMsg}\n\nThis can happen after page refresh. Try re-uploading the CSV file.`);
-          } else {
-            throw new Error(`DuckDB query failed: ${errorMsg}\n\nTip: Check your SQL syntax and column names.`);
-          }
+          // Show raw DuckDB error without extra help messages
+          throw new Error(errorMsg);
         }
       };
 
@@ -1123,21 +1048,9 @@ NOW: Rewrite your query using this exact pattern.
       };
     } catch (error: any) {
       const executionTime = Date.now() - startTime;
-      let errorMessage = error.message || 'Unknown execution error';
-      
-      // Enhance common error messages with helpful context
-      if (errorMessage.includes('Timeout')) {
-        errorMessage = `⏱️ Execution Timeout: Code took longer than 30 seconds.\n\nTip: Try to optimize your code or break it into smaller steps.`;
-      } else if (errorMessage.includes('out of memory')) {
-        errorMessage = `💾 Memory Error: ${errorMessage}\n\nTip: Try processing data in smaller chunks or using SQL queries (await query(...)) for better performance.`;
-      } else if (errorMessage.includes('Maximum call stack')) {
-        errorMessage = `🔄 Stack Overflow: Too much recursion or a very large loop.\n\nTip: Use iterative approaches instead of recursion for large datasets.`;
-      } else if (error.stack) {
-        // Include stack trace for debugging
-        const stackLines = error.stack.split('\n').slice(0, 3).join('\n');
-        errorMessage = `❌ ${errorMessage}\n\nStack Trace:\n${stackLines}`;
-      }
-      
+      // Show raw error message without enhancement
+      const errorMessage = error.message || 'Unknown execution error';
+
       return {
         success: false,
         error: errorMessage,

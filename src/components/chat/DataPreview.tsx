@@ -24,6 +24,7 @@ export function DataPreview({ isOpen, onClose, data: initialData, fileName, head
   const [sortDirection, setSortDirection] = useState<SortDirection>(null);
   const [searchTerm, setSearchTerm] = useState("");
   const [selectedColumn, setSelectedColumn] = useState<string | null>(null);
+  const [searchColumn, setSearchColumn] = useState<string>("__all__"); // New: column to search in
   const [rowsPerPage, setRowsPerPage] = useState<number>(50);
   const [currentPage, setCurrentPage] = useState<number>(1);
   const [jumpToRow, setJumpToRow] = useState<string>("");
@@ -109,7 +110,7 @@ export function DataPreview({ isOpen, onClose, data: initialData, fileName, head
     return stats;
   }, [data, searchResults, visibleHeaders]);
 
-  // Debounced search - searches ALL data via DuckDB
+  // Debounced search - searches ALL data via DuckDB using FAST Parquet query
   useEffect(() => {
     if (searchTimeoutRef.current) {
       clearTimeout(searchTimeoutRef.current);
@@ -126,38 +127,53 @@ export function DataPreview({ isOpen, onClose, data: initialData, fileName, head
     searchTimeoutRef.current = setTimeout(async () => {
       try {
         if (csvId) {
-          // Use DuckDB to search ALL data efficiently
-          const { executeDuckDBSql } = await import('@/lib/duckdb');
-          const searchLower = searchTerm.toLowerCase().replace(/'/g, "''");
-          
-          // Build WHERE clause to search all text columns
-          const whereConditions = visibleHeaders.map(h => 
-            `LOWER(CAST("${h}" AS VARCHAR)) LIKE '%${searchLower}%'`
-          ).join(' OR ');
-          
-          const sql = `SELECT * FROM csvData WHERE ${whereConditions} LIMIT 5000`;
-          const results = await executeDuckDBSql(csvId, sql);
+          // FAST: Use queryParquetDirect to search entire dataset
+          const { queryParquetDirect } = await import('@/lib/duckdb');
+
+          // Escape search term properly for SQL
+          const searchLower = searchTerm.toLowerCase().replace(/'/g, "''").replace(/\\/g, '\\\\');
+
+          // Build WHERE clause - search specific column or all columns
+          let whereConditions: string;
+          if (searchColumn === "__all__") {
+            // Search all columns
+            whereConditions = visibleHeaders.map(h =>
+              `LOWER(CAST("${h.replace(/"/g, '""')}" AS VARCHAR)) LIKE '%${searchLower}%'`
+            ).join(' OR ');
+          } else {
+            // Search specific column only
+            whereConditions = `LOWER(CAST("${searchColumn.replace(/"/g, '""')}" AS VARCHAR)) LIKE '%${searchLower}%'`;
+          }
+
+          const results = await queryParquetDirect(csvId, 5000, whereConditions);
           setSearchResults(results || []);
         } else {
           // Fallback: search loaded data only
           const searchLower = searchTerm.toLowerCase();
-          const filtered = data.filter(row => 
-            visibleHeaders.some(header => 
-              String(row[header] ?? '').toLowerCase().includes(searchLower)
-            )
-          );
+          const filtered = data.filter(row => {
+            if (searchColumn === "__all__") {
+              return visibleHeaders.some(header =>
+                String(row[header] ?? '').toLowerCase().includes(searchLower)
+              );
+            } else {
+              return String(row[searchColumn] ?? '').toLowerCase().includes(searchLower);
+            }
+          });
           setSearchResults(filtered);
         }
         setCurrentPage(1);
-      } catch (error) {
-        console.error('Search failed:', error);
+      } catch (error: any) {
         // Fallback to local search
         const searchLower = searchTerm.toLowerCase();
-        const filtered = data.filter(row => 
-          visibleHeaders.some(header => 
-            String(row[header] ?? '').toLowerCase().includes(searchLower)
-          )
-        );
+        const filtered = data.filter(row => {
+          if (searchColumn === "__all__") {
+            return visibleHeaders.some(header =>
+              String(row[header] ?? '').toLowerCase().includes(searchLower)
+            );
+          } else {
+            return String(row[searchColumn] ?? '').toLowerCase().includes(searchLower);
+          }
+        });
         setSearchResults(filtered);
         setCurrentPage(1);
       } finally {
@@ -170,34 +186,32 @@ export function DataPreview({ isOpen, onClose, data: initialData, fileName, head
         clearTimeout(searchTimeoutRef.current);
       }
     };
-  }, [searchTerm, csvId, visibleHeaders, data]);
+  }, [searchTerm, searchColumn, csvId, visibleHeaders, data]);
 
-  // Load more data for pagination
+  // Load more data for pagination - FAST query from Parquet
   const loadMoreData = useCallback(async (targetPage: number) => {
     if (!csvId || isLoadingMore || hasLoadedAll) return;
-    
+
     const neededRows = targetPage * rowsPerPage;
     if (data.length >= neededRows) return;
 
     setIsLoadingMore(true);
     try {
-      const { executeDuckDBSql } = await import('@/lib/duckdb');
-      
-      // Load next chunk
-      const offset = data.length;
-      const limit = Math.max(INITIAL_LOAD, neededRows - data.length + rowsPerPage);
-      
-      let sql = `SELECT * FROM csvData`;
-      if (sortColumn && sortDirection) {
-        sql += ` ORDER BY "${sortColumn}" ${sortDirection.toUpperCase()}`;
-      }
-      sql += ` LIMIT ${limit} OFFSET ${offset}`;
-      
-      const newRows = await executeDuckDBSql(csvId, sql);
-      
-      if (newRows && newRows.length > 0) {
-        setData(prev => [...prev, ...newRows]);
-        if (newRows.length < limit) {
+      const { queryParquetDirect } = await import('@/lib/duckdb');
+
+      // Load next chunk - but queryParquetDirect doesn't support OFFSET yet
+      // So we'll load more rows and slice client-side (still faster than IndexedDB)
+      const limit = Math.max(INITIAL_LOAD, neededRows + rowsPerPage);
+
+      const orderBy = sortColumn && sortDirection
+        ? `"${sortColumn.replace(/"/g, '""')}" ${sortDirection.toUpperCase()}`
+        : undefined;
+
+      const allRows = await queryParquetDirect(csvId, limit, undefined, orderBy);
+
+      if (allRows && allRows.length > 0) {
+        setData(allRows);
+        if (allRows.length >= actualTotalRows || allRows.length < limit) {
           setHasLoadedAll(true);
         }
       } else {
@@ -208,25 +222,25 @@ export function DataPreview({ isOpen, onClose, data: initialData, fileName, head
     } finally {
       setIsLoadingMore(false);
     }
-  }, [csvId, data.length, isLoadingMore, hasLoadedAll, rowsPerPage, sortColumn, sortDirection]);
+  }, [csvId, isLoadingMore, hasLoadedAll, rowsPerPage, sortColumn, sortDirection, actualTotalRows]);
 
-  // Load all data for export
+  // Load all data for export - FAST query from Parquet
   const loadAllData = useCallback(async (): Promise<any[]> => {
     if (!csvId || hasLoadedAll) return searchResults || data;
-    
+
     try {
-      const { executeDuckDBSql } = await import('@/lib/duckdb');
-      let sql = `SELECT * FROM csvData`;
-      if (sortColumn && sortDirection) {
-        sql += ` ORDER BY "${sortColumn}" ${sortDirection.toUpperCase()}`;
-      }
-      const allRows = await executeDuckDBSql(csvId, sql);
+      const { queryParquetDirect } = await import('@/lib/duckdb');
+      const orderBy = sortColumn && sortDirection
+        ? `"${sortColumn.replace(/"/g, '""')}" ${sortDirection.toUpperCase()}`
+        : undefined;
+
+      const allRows = await queryParquetDirect(csvId, actualTotalRows, undefined, orderBy);
       return allRows || data;
     } catch (error) {
       console.error('Failed to load all data:', error);
       return data;
     }
-  }, [csvId, data, hasLoadedAll, searchResults, sortColumn, sortDirection]);
+  }, [csvId, data, hasLoadedAll, searchResults, sortColumn, sortDirection, actualTotalRows]);
 
   // Active data source (search results or loaded data)
   const activeData = searchResults || data;
@@ -292,23 +306,21 @@ export function DataPreview({ isOpen, onClose, data: initialData, fileName, head
     }
     setCurrentPage(1);
     
-    // If we have more data to load and sorting, reload from start with new sort
+    // If we have more data to load and sorting, reload from start with new sort - FAST
     if (csvId && !hasLoadedAll && !searchResults) {
       setIsLoadingMore(true);
       try {
-        const { executeDuckDBSql } = await import('@/lib/duckdb');
-        const newSort = sortColumn === column 
+        const { queryParquetDirect } = await import('@/lib/duckdb');
+        const newSort = sortColumn === column
           ? (sortDirection === 'asc' ? 'desc' : null)
           : 'asc';
         const newCol = sortColumn === column && sortDirection === 'desc' ? null : column;
-        
-        let sql = `SELECT * FROM csvData`;
-        if (newCol && newSort) {
-          sql += ` ORDER BY "${newCol}" ${newSort.toUpperCase()}`;
-        }
-        sql += ` LIMIT ${INITIAL_LOAD}`;
-        
-        const rows = await executeDuckDBSql(csvId, sql);
+
+        const orderBy = newCol && newSort
+          ? `"${newCol.replace(/"/g, '""')}" ${newSort.toUpperCase()}`
+          : undefined;
+
+        const rows = await queryParquetDirect(csvId, INITIAL_LOAD, undefined, orderBy);
         if (rows) {
           setData(rows);
           setHasLoadedAll(rows.length >= actualTotalRows);
@@ -435,12 +447,29 @@ export function DataPreview({ isOpen, onClose, data: initialData, fileName, head
         {/* Controls Bar */}
         <div className="p-4 bg-secondary/30 border-b border-border">
           <div className="flex items-center gap-3 flex-wrap">
+            {/* Column selector for search */}
+            <select
+              value={searchColumn}
+              onChange={(e) => setSearchColumn(e.target.value)}
+              className="h-9 rounded-md border border-border bg-background px-3 text-sm text-foreground cursor-pointer min-w-[120px]"
+              title="Select column to search"
+            >
+              <option value="__all__">All Columns</option>
+              {visibleHeaders.map(header => (
+                <option key={header} value={header}>{header}</option>
+              ))}
+            </select>
+
             <div className="flex-1 min-w-[200px] relative">
               <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-muted-foreground" />
               <Input
                 value={searchTerm}
                 onChange={(e) => setSearchTerm(e.target.value)}
-                placeholder={csvId ? "Search ALL data..." : "Search loaded data..."}
+                placeholder={
+                  searchColumn === "__all__"
+                    ? (csvId ? "Search ALL columns in entire dataset..." : "Search all columns...")
+                    : (csvId ? `Search "${searchColumn}" in entire dataset...` : `Search "${searchColumn}"...`)
+                }
                 className="pl-10 bg-background"
               />
               {isSearching && (
@@ -478,9 +507,13 @@ export function DataPreview({ isOpen, onClose, data: initialData, fileName, head
             {searchResults && (
               <div className="flex items-center gap-1 bg-blue-500/20 text-blue-400 px-2 py-1 rounded text-sm">
                 <Search className="w-3 h-3" />
-                <span>{searchResults.length.toLocaleString()} results</span>
-                <button 
-                  onClick={() => { setSearchTerm(""); setSearchResults(null); }}
+                <span>
+                  {searchResults.length.toLocaleString()} result{searchResults.length !== 1 ? 's' : ''}
+                  {csvId && searchResults.length >= 5000 && <span className="ml-1">(showing first 5k)</span>}
+                  {!csvId && <span className="ml-1 text-yellow-400">(loaded data only)</span>}
+                </span>
+                <button
+                  onClick={() => { setSearchTerm(""); setSearchResults(null); setSearchColumn("__all__"); }}
                   className="ml-1 hover:bg-blue-500/30 rounded p-0.5"
                 >
                   <X className="w-3 h-3" />
