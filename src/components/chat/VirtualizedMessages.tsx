@@ -37,7 +37,9 @@ export function VirtualizedMessages({
           <div className="flex-1 bg-chat-assistant rounded-lg p-4">
             {csvLoadingProgress ? (
               <div className="space-y-2">
-                <div className="text-sm font-medium">Loading CSV data: {csvLoadingProgress.file}</div>
+                <div className="text-sm font-medium">
+                  {(csvLoadingProgress as any).message || `Loading value info: ${csvLoadingProgress.file}`}
+                </div>
                 {(csvLoadingProgress as any).error ? (
                   <div className="text-xs text-red-500">
                     {(csvLoadingProgress as any).error}

@@ -2566,11 +2566,11 @@ export function autoInspectData(
   // Create a compact summary with CRYSTAL CLEAR distinction between sample and total
   let summary = '';
   if (sampleSize < totalRows) {
-    summary = `Dataset: ${totalRows.toLocaleString()} TOTAL ROWS (sampled ${sampleSize.toLocaleString()} rows for this analysis), ${columns.length} columns.\n`;
-    summary += `IMPORTANT: This analysis is based on ${sampleSize.toLocaleString()} sample rows, NOT all ${totalRows.toLocaleString()} rows. Unique values shown are from sample only.\n\n`;
+    summary = `Dataset: ${totalRows.toLocaleString()} TOTAL ROWS (sampled ${sampleSize.toLocaleString()} rows for this summary), ${columns.length} columns.\n`;
+    summary += `IMPORTANT: This is a SUMMARY, not actual data - write code to analyze specifics. Analyzed ${sampleSize.toLocaleString()} sample rows, NOT all ${totalRows.toLocaleString()} rows. Unique values are from sample only.\n\n`;
   } else {
     summary = `Dataset: ${totalRows.toLocaleString()} rows (all rows analyzed), ${columns.length} columns.\n`;
-    summary += `NOTE: Unique counts below show sample values (max 20 per column).\n\n`;
+    summary += `NOTE: This is a SUMMARY, not actual data - write code to analyze specifics. Unique values show sample only (max 20 per column).\n\n`;
   }
 
   // Add compact column details (type, unique count, 5 samples, nulls)

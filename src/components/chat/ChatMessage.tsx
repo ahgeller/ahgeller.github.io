@@ -174,7 +174,9 @@ function EnhancedAIMessage({ message, modelName, sidebarOpen }: { message: Messa
       }
     }
     
-    // Combine and sort all matches
+    // Include code, results, AND errors in allMatches
+    // Errors need to be included so we can skip their text (avoid showing duplicate error messages)
+    // But errors won't be rendered as separate parts - they're shown as failed code blocks
     const allMatches = [
       ...codeMatches.map(m => ({ ...m, type: 'code' as const })),
       ...resultMatches.map(m => ({ ...m, type: 'result' as const })),
@@ -196,56 +198,48 @@ function EnhancedAIMessage({ message, modelName, sidebarOpen }: { message: Messa
       }
       return idx;
     };
-    // CRITICAL: Match results to code blocks by POSITION, not index
-    // Results appear immediately after their corresponding code blocks
-    resultMatches.forEach((resultMatch, resultIdx) => {
-      // Find the code block that corresponds to this result
-      // Try strict next-after matching; fallback to nearest preceding
+    // SIMPLE SEQUENTIAL MATCHING: Code blocks execute in order, results appear in same order
+    // Build combined list of all results/errors in the order they appear
+    const allResultsAndErrors = [
+      ...resultMatches.map((r, i) => ({
+        type: 'result' as const,
+        index: i,
+        position: r.start,
+        json: r.json,
+        content: r.content
+      })),
+      ...errorMatches.map((e, i) => ({
+        type: 'error' as const,
+        index: i,
+        position: e.start,
+        error: e.error
+      }))
+    ].sort((a, b) => a.position - b.position);
 
-      // Results typically appear after the code block
-      let correspondingCodeIdx = -1;
-      for (let i = codeMatches.length - 1; i >= 0; i--) {
-        if (codeMatches[i].end < resultMatch.start) {
-          correspondingCodeIdx = i;
-          break;
+    // Match each result/error to code blocks sequentially
+    let codeBlockIdx = 0;
+    allResultsAndErrors.forEach((item) => {
+      // Skip if we've run out of code blocks
+      if (codeBlockIdx >= codeMatches.length) return;
+
+      // Mark this code block as having a result
+      codeBlocksWithResults.add(codeBlockIdx);
+
+      if (item.type === 'result') {
+        // Check if result indicates failure (JSON with success: false)
+        if (item.json && item.json.success === false) {
+          codeBlocksWithErrors.set(codeBlockIdx, item.json.error || 'Execution failed');
         }
-      }
-      
-      if (correspondingCodeIdx >= 0) {
-        codeBlocksWithResults.add(correspondingCodeIdx);
-        
-        // Check if this is a failed execution
-        try {
-          const json = JSON.parse(resultMatch.content);
-          if (json && json.success === false) {
-            codeBlocksWithErrors.set(correspondingCodeIdx, json.error || 'Execution failed');
-          }
-        } catch (e) {
-          // Not JSON, ignore
-        }
-      }
-    });
-    
-    // Mark code blocks with execution errors (error messages without results)
-    errorMatches.forEach((errorMatch, errorIdx) => {
-      // Find the code block that corresponds to this error
-      // Errors typically appear after the code block
-      let correspondingCodeIdx = -1;
-      for (let i = codeMatches.length - 1; i >= 0; i--) {
-        if (codeMatches[i].end < errorMatch.start) {
-          correspondingCodeIdx = i;
-          break;
-        }
-      }
-      if (correspondingCodeIdx >= 0) {
-        codeBlocksWithResults.add(correspondingCodeIdx);
-        // CRITICAL: Check if error starts with "Skipped:" - these are orange boxes
-        if (errorMatch.error.startsWith('Skipped:')) {
-          codeBlocksSkipped.set(correspondingCodeIdx, errorMatch.error);
+      } else {
+        // Error message
+        if (item.error.startsWith('Skipped:')) {
+          codeBlocksSkipped.set(codeBlockIdx, item.error);
         } else {
-          codeBlocksWithErrors.set(correspondingCodeIdx, errorMatch.error);
+          codeBlocksWithErrors.set(codeBlockIdx, item.error);
         }
       }
+
+      codeBlockIdx++;
     });
     
     // Check if execution was cancelled
@@ -300,67 +294,59 @@ function EnhancedAIMessage({ message, modelName, sidebarOpen }: { message: Messa
           lastIndex = match.end; // Skip this code block in text parsing
         }
       } else if (match.type === 'error') {
-        // Error message - skip it as we've already associated it with the code block
-        // The error will be shown in the failed execution box
-        lastIndex = match.end; // Skip this error message in text parsing
+        // Skip error text - errors are already shown as failed code blocks inline
+        // Don't render errors as separate parts at the end
+        lastIndex = match.end;
       } else if (match.type === 'result') {
-        // Check if this result is a failed execution
+        // CRITICAL: Only show results for SUCCESSFUL executions
+        // Failed executions are already shown as red boxes when processing code matches
+        // Don't duplicate them here
         const resultMatch = resultMatches.find(r => r.start === match.start);
         if (resultMatch) {
-          // Check if corresponding code block has error
-          let resultIndex = 0;
-          for (let i = 0; i < resultMatches.length; i++) {
-            if (resultMatches[i].start === match.start) {
-              resultIndex = i;
+          // Find which code block this result belongs to
+          let correspondingCodeIdx = -1;
+          for (let i = codeMatches.length - 1; i >= 0; i--) {
+            if (codeMatches[i].end < match.start) {
+              correspondingCodeIdx = i;
               break;
             }
           }
-          
-          const hasError = codeBlocksWithErrors.has(resultIndex);
-          if (hasError) {
-            // Find the corresponding code block for this failed execution
-            const codeMatch = codeMatches.find(c => c.index === resultIndex);
-            parts.push({
-              type: 'failed',
-              content: codeMatch?.content || '',
-              index: resultIndex,
-              error: codeBlocksWithErrors.get(resultIndex) || 'Execution failed'
-            });
-          } else {
-            // Successful execution
+
+          // Only show result if code block doesn't have error or skip marker
+          // If it has error, it's already shown as red/orange box
+          const hasError = correspondingCodeIdx >= 0 && codeBlocksWithErrors.has(correspondingCodeIdx);
+          const isSkipped = correspondingCodeIdx >= 0 && codeBlocksSkipped.has(correspondingCodeIdx);
+
+          if (!hasError && !isSkipped) {
+            // Successful execution - show result
             parts.push({
               type: 'result',
               content: match.content,
-              index: resultIndex
+              index: correspondingCodeIdx >= 0 ? correspondingCodeIdx : idx
             });
-          }
-        } else {
-          parts.push({
-            type: 'result',
-            content: match.content,
-            index: idx
-          });
-        }
-        
-        // Check if there's a chart in the result (check nested objects too)
-        const hasChart = (obj: any): boolean => {
-          if (!obj || typeof obj !== 'object') return false;
-          if (obj.echarts_chart || obj.echartsChart || obj.plotly_chart || obj.plotlyChart) return true;
-          // Check nested objects
-          for (const key in obj) {
-            if (obj[key] && typeof obj[key] === 'object') {
-              if (hasChart(obj[key])) return true;
+
+            // Check if there's a chart in the result (check nested objects too)
+            const hasChart = (obj: any): boolean => {
+              if (!obj || typeof obj !== 'object') return false;
+              if (obj.echarts_chart || obj.echartsChart || obj.plotly_chart || obj.plotlyChart) return true;
+              // Check nested objects
+              for (const key in obj) {
+                if (obj[key] && typeof obj[key] === 'object') {
+                  if (hasChart(obj[key])) return true;
+                }
+              }
+              return false;
+            };
+
+            if (hasChart(match.json)) {
+              parts.push({
+                type: 'chart',
+                content: JSON.stringify(match.json),
+                index: idx
+              });
             }
           }
-          return false;
-        };
-        
-        if (hasChart(match.json)) {
-          parts.push({
-            type: 'chart',
-            content: JSON.stringify(match.json),
-            index: idx
-          });
+          // If has error or skipped, skip this result entirely - already shown as red/orange box
         }
         lastIndex = match.end; // Skip this result in text parsing
       }

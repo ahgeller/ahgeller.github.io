@@ -268,31 +268,72 @@ export async function loadCsvDataWithValueInfo(
           // Create valueInfo from a small sample query (max 1000 rows for efficiency)
           try {
             const { queryCSVWithDuckDB } = await import("@/lib/duckdb");
+            const { getCsvFilesFromStorageSync } = await import("@/lib/chatApiHelpers");
             const sampleSize = 1000;
-            // Query a small sample for the first CSV ID (or only one if single)
+
+            // Get file names for progress display
+            const files = getCsvFilesFromStorageSync();
+            const fileNames = csvIds.map(id => {
+              const file = files.find((f: any) => f.id === id);
+              return file?.name || id;
+            });
+            const displayName = fileNames.length > 1
+              ? `${fileNames.length} files`
+              : fileNames[0] || 'CSV file';
+
+            // Show progress: generating value info summary
+            if (onProgress) {
+              onProgress({ file: displayName, percent: 0, message: 'Generating value info summary for AI...' });
+            }
+
+            // Query a small sample for each CSV ID
             // For arrays, we'll create valueInfo for each one separately
+            let processedCount = 0;
             for (const id of csvIds) {
               const existingValueInfo = getValueInfo(id, 'csv', chatId);
               if (!existingValueInfo) {
                 try {
+                  // Get individual file name for progress
+                  const currentFile = files.find((f: any) => f.id === id);
+                  const currentFileName = currentFile?.name || id;
+
+                  // Update progress for current file
+                  const progressPercent = Math.floor((processedCount / csvIds.length) * 90); // 0-90%
+                  if (onProgress) {
+                    onProgress({
+                      file: fileNames.length > 1 ? `${currentFileName} (${processedCount + 1}/${csvIds.length})` : currentFileName,
+                      percent: progressPercent,
+                      message: 'Generating value info summary...'
+                    });
+                  }
+
                   // Query a small sample from DuckDB
                   const sampleData = await queryCSVWithDuckDB(
                     id, // Single ID, not array
                     csvFilterColumns,
                     csvFilterValues,
-                    undefined // No progress callback to avoid loading bar
+                    undefined // No progress callback to avoid nested loading bars
                   );
-                  
+
                   // Use a smaller sample for valueInfo creation (max 1000 rows)
                   const valueInfoSample = sampleData.slice(0, sampleSize);
                   if (valueInfoSample.length > 0) {
                     await createValueInfoForCsv(valueInfoSample, id, chatId, false);
                   }
+                  processedCount++;
                 } catch (e) {
                   console.warn(`Failed to create valueInfo from DuckDB sample for ${id}:`, e);
+                  processedCount++;
                   // Continue with next ID
                 }
+              } else {
+                processedCount++;
               }
+            }
+
+            // Complete
+            if (onProgress) {
+              onProgress({ file: displayName, percent: 100, message: 'Value info ready' });
             }
           } catch (e) {
             console.warn('Failed to create valueInfo from DuckDB sample:', e);

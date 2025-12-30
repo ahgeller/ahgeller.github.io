@@ -7,7 +7,19 @@ const registeredFiles = new Map<string, { file: File | Blob; tableName: string }
 const MAX_REGISTERED_FILES = 10; // Maximum files to keep registered
 
 // Debug flag - set to true to see what's happening
-const DEBUG = true;
+const DEBUG = false;
+
+/**
+ * Timeout wrapper for async operations
+ */
+function withTimeout<T>(promise: Promise<T>, timeoutMs: number, operationName: string): Promise<T> {
+  return Promise.race([
+    promise,
+    new Promise<T>((_, reject) =>
+      setTimeout(() => reject(new Error(`${operationName} timed out after ${timeoutMs}ms`)), timeoutMs)
+    ),
+  ]);
+}
 
 /**
  * Hydrate registeredFiles map from OPFS DB tables at startup
@@ -327,102 +339,65 @@ export async function initDuckDB() {
   // Start initialization and store the promise
   initializationPromise = (async () => {
     try {
-    // Get bundles - use the package's bundle system
-    let bundles = await import('@duckdb/duckdb-wasm');
-    const getJsDelivrBundles = (bundles as any).getJsDelivrBundles;
-    
-    if (!getJsDelivrBundles) {
-      throw new Error('getJsDelivrBundles not found');
-    }
-    
-    const bundleList = await getJsDelivrBundles();
-    
-    // Handle bundles - could be array, object, or Promise
-    let bundleArray: any[] = [];
-    
-    if (Array.isArray(bundleList)) {
-      bundleArray = bundleList;
-    } else if (typeof bundleList === 'object' && bundleList !== null) {
-      // Convert object to array
-      const values = Object.values(bundleList);
-      // Resolve any Promises
-      const resolved = await Promise.allSettled(
-        values.map(async (b: any) => typeof b?.then === 'function' ? await b : b)
-      );
-      bundleArray = resolved
-        .filter((r: any) => r.status === 'fulfilled')
-        .map((r: any) => r.value);
-    }
-    
-    if (bundleArray.length === 0) {
-      throw new Error('No DuckDB bundles available');
-    }
-    
-    // Select the 'eh' bundle (best for modern browsers, faster queries)
-    const bundle = bundleArray.find((b: any) => b?.name === 'eh') || bundleArray[0];
-    
-    if (!bundle) {
-      throw new Error('No valid DuckDB bundle found');
-    }
-    
-    // Resolve bundle if it's a Promise
-    let resolvedBundle = typeof bundle.then === 'function' ? await bundle : bundle;
-    
-    // Resolve bundle properties if they're Promises
-    if (resolvedBundle && typeof resolvedBundle === 'object') {
-      const mainModule = resolvedBundle.mainModule;
-      const mainWorker = resolvedBundle.mainWorker;
-      
-      // Await Promises if they are Promises
-      const resolvedMainModule = typeof mainModule?.then === 'function' ? await mainModule : mainModule;
-      const resolvedMainWorker = typeof mainWorker?.then === 'function' ? await mainWorker : mainWorker;
-      
-      // Update bundle with resolved values
-      resolvedBundle = {
-        ...resolvedBundle,
-        mainModule: resolvedMainModule,
-        mainWorker: resolvedMainWorker,
-      };
-    }
+    // Import DuckDB module
+    const duckdbModule = await import('@duckdb/duckdb-wasm');
 
-    // EH bundle for faster queries - uses modern CPU features (SIMD, etc.)
+    // Use local EH bundle (fast - modern CPU features)
     const workerURL = '/duckdb-browser-eh.worker.js';
     const wasmURL = '/duckdb-eh.wasm';
 
-    if (!workerURL) {
-      throw new Error(`DuckDB worker file missing`);
-    }
+    console.log('🔧 Initializing DuckDB with local EH bundle (fast)...', { workerURL, wasmURL });
 
-    DEBUG && console.log('🔧 Initializing DuckDB with AsyncDuckDB pattern...', { workerURL, wasmURL });
-    
     // Use AsyncDuckDB - the actual export from the package
-    const AsyncDuckDB = duckdb.AsyncDuckDB;
+    const AsyncDuckDB = duckdbModule.AsyncDuckDB;
     if (!AsyncDuckDB) {
       throw new Error('AsyncDuckDB not found');
     }
     
     // Use the recommended pattern: Create Worker manually, then instantiate
-    const ConsoleLogger = duckdb.ConsoleLogger;
+    const ConsoleLogger = duckdbModule.ConsoleLogger;
     
     // Create logger with WARN level (level 1) - always create a logger if available
     const logger = ConsoleLogger ? new ConsoleLogger(1) : null;
     
     // Create Worker manually - must use local path, not CDN URL
     const worker = new Worker(workerURL, { type: 'module' });
-    
+
+    // Listen for worker errors
+    worker.onerror = (error) => {
+      console.error('❌ DuckDB Worker error:', error);
+    };
+
     // Create AsyncDuckDB instance with logger and worker
     // Logger is required by the constructor
     if (!logger) {
       throw new Error('ConsoleLogger is required for DuckDB initialization');
     }
     db = new AsyncDuckDB(logger, worker);
-    
-    // Instantiate with WASM URL
-    await db.instantiate(wasmURL);
 
-    // Open (or create) a persistent database in OPFS so tables survive reloads
+    console.log('📥 Loading DuckDB WASM (18MB)... This may take 10-30 seconds on first load.');
+
+    // Instantiate with WASM URL (with 60s timeout for large file)
     try {
-      await (db as any).open({ path: 'opfs:/duckdb/main.db' });
+      await withTimeout(
+        db.instantiate(wasmURL),
+        60000,
+        'DuckDB WASM instantiation'
+      );
+      console.log('✅ WASM loaded successfully');
+    } catch (err) {
+      console.error('❌ WASM instantiation failed:', err);
+      console.error('Check browser console Network tab - is', wasmURL, 'loading?');
+      throw err;
+    }
+
+    // Open (or create) a persistent database in OPFS so tables survive reloads (with 10s timeout)
+    try {
+      await withTimeout(
+        (db as any).open({ path: 'opfs:/duckdb/main.db' }),
+        10000,
+        'DuckDB OPFS open'
+      );
       DEBUG && console.log('🗂️ DuckDB opened with OPFS persistence at opfs:/duckdb/main.db');
     } catch (openErr) {
       console.warn('DuckDB OPFS open failed, continuing with in-memory DB:', openErr);
@@ -454,8 +429,16 @@ export async function initDuckDB() {
 
     initialized = true;
 
-    // Hydrate registeredFiles from existing OPFS tables
-    await hydrateRegisteredFilesFromOPFS();
+    // Hydrate registeredFiles from existing OPFS tables (with timeout to prevent hanging)
+    try {
+      await withTimeout(
+        hydrateRegisteredFilesFromOPFS(),
+        5000,
+        'OPFS table hydration'
+      );
+    } catch (hydrateErr) {
+      console.warn('Table hydration timed out or failed (non-critical):', hydrateErr);
+    }
     
     return db;
     } catch (err) {
@@ -589,7 +572,8 @@ export function isDuckDBInitialized(): boolean {
 export async function processCSVWithDuckDB(
   file: File,
   onProgress?: (progress: { file: string; percent: number; rows?: number; message?: string }) => void,
-  existingFileId?: string  // NEW: Allow passing in the file ID from CSVSelector
+  existingFileId?: string,  // Allow passing in the file ID from CSVSelector
+  convertToParquet: boolean = true  // NEW: Allow skipping Parquet conversion
 ): Promise<{
   headers: string[];
   rowCount: number;
@@ -597,7 +581,7 @@ export async function processCSVWithDuckDB(
   fileBlob?: Blob;
   hasDuckDB: boolean;
   tableName?: string;
-  fileId?: string;  // NEW: Return the fileId so CSVSelector can use it
+  fileId?: string;  // Return the fileId so CSVSelector can use it
 }> {
   try {
     // Ensure DuckDB is initialized
@@ -650,38 +634,55 @@ export async function processCSVWithDuckDB(
         await db.registerFileHandle(safeFileName, file, 2, true); // 2 = BROWSER_FILEREADER protocol
         DEBUG && console.log(`✅ File registered: ${safeFileName}`);
 
-        onProgress?.({ file: fileName, percent: 20, message: 'Converting to Parquet format...' });
-
-        // OPTIMIZATION: Convert to Parquet FIRST (before loading into table)
-        // This compresses the data and reduces memory usage
-        const parquetFileName = `${cleanFileId}.parquet`;
-        const safeParquetName = parquetFileName.replace(/[<>:"|?*\\]/g, '_').replace(/\s+/g, '_');
-
-        DEBUG && console.log(`📦 Converting CSV to Parquet: ${safeFileName} → ${safeParquetName}`);
-
-        // Stream CSV directly to Parquet in OPFS (no intermediate table - saves memory!)
         const escapedCsvFileName = safeFileName.replace(/'/g, "''");
-        const escapedParquetName = safeParquetName.replace(/'/g, "''");
-        const opfsParquetPath = `opfs:/duckdb/${escapedParquetName}`;
-
-        await conn.query(`
-          COPY (
-            SELECT * FROM read_csv('${escapedCsvFileName}', header=true, auto_detect=true, ignore_errors=true, sample_size=-1)
-          ) TO '${opfsParquetPath}' (FORMAT PARQUET, COMPRESSION 'ZSTD')
-        `);
-
-        DEBUG && console.log(`✅ Parquet file created in OPFS (compressed)`);
-        onProgress?.({ file: fileName, percent: 70, message: 'Loading from Parquet...' });
-
-        // Now create table from the smaller, compressed Parquet file
         const escapedTableName = tableName.replace(/"/g, '""');
-        await conn.query(`DROP TABLE IF EXISTS "${escapedTableName}"`);
-        await conn.query(`
-          CREATE TABLE "${escapedTableName}" AS
-          SELECT * FROM read_parquet('${opfsParquetPath}')
-        `);
 
-        DEBUG && console.log(`✅ Table created from Parquet`);
+        if (convertToParquet) {
+          onProgress?.({ file: fileName, percent: 20, message: 'Converting to Parquet format...' });
+
+          // OPTIMIZATION: Convert to Parquet FIRST (before loading into table)
+          // This compresses the data and reduces memory usage
+          const parquetFileName = `${cleanFileId}.parquet`;
+          const safeParquetName = parquetFileName.replace(/[<>:"|?*\\]/g, '_').replace(/\s+/g, '_');
+
+          DEBUG && console.log(`📦 Converting CSV to Parquet: ${safeFileName} → ${safeParquetName}`);
+
+          // Stream CSV directly to Parquet in OPFS (no intermediate table - saves memory!)
+          const escapedParquetName = safeParquetName.replace(/'/g, "''");
+          const opfsParquetPath = `opfs:/duckdb/${escapedParquetName}`;
+
+          await conn.query(`
+            COPY (
+              SELECT * FROM read_csv('${escapedCsvFileName}', header=true, auto_detect=true, ignore_errors=true, sample_size=-1)
+            ) TO '${opfsParquetPath}' (FORMAT PARQUET, COMPRESSION 'ZSTD')
+          `);
+
+          DEBUG && console.log(`✅ Parquet file created in OPFS (compressed)`);
+          onProgress?.({ file: fileName, percent: 70, message: 'Loading from Parquet...' });
+
+          // Now create table from the smaller, compressed Parquet file
+          await conn.query(`DROP TABLE IF EXISTS "${escapedTableName}"`);
+          await conn.query(`
+            CREATE TABLE "${escapedTableName}" AS
+            SELECT * FROM read_parquet('${opfsParquetPath}')
+          `);
+
+          DEBUG && console.log(`✅ Table created from Parquet`);
+        } else {
+          onProgress?.({ file: fileName, percent: 20, message: 'Loading CSV directly...' });
+
+          DEBUG && console.log(`📄 Creating table directly from CSV (no Parquet conversion)`);
+
+          // Create table directly from CSV without Parquet conversion
+          await conn.query(`DROP TABLE IF EXISTS "${escapedTableName}"`);
+          await conn.query(`
+            CREATE TABLE "${escapedTableName}" AS
+            SELECT * FROM read_csv('${escapedCsvFileName}', header=true, auto_detect=true, ignore_errors=true, sample_size=-1)
+          `);
+
+          DEBUG && console.log(`✅ Table created directly from CSV`);
+        }
+
         onProgress?.({ file: fileName, percent: 90, message: 'Verifying data...' });
 
       } catch (readError: any) {
@@ -1476,6 +1477,52 @@ export async function queryCSVWithDuckDB(
 // Execute raw SQL query on DuckDB CSV table
 // Execute raw SQL query on DuckDB CSV table
 /**
+ * Validate WHERE clause to prevent SQL injection
+ */
+function isValidWhereClause(clause: string): boolean {
+  // Check for dangerous SQL keywords that could modify data
+  const dangerous = /;\s*(DROP|DELETE|INSERT|UPDATE|ALTER|CREATE|EXEC|EXECUTE|GRANT|REVOKE)/i;
+  if (dangerous.test(clause)) {
+    console.error('Blocked dangerous SQL in WHERE clause:', clause);
+    return false;
+  }
+
+  // Check for comment injection attempts
+  if (clause.includes('--') || clause.includes('/*') || clause.includes('*/')) {
+    console.error('Blocked SQL comment in WHERE clause:', clause);
+    return false;
+  }
+
+  return true;
+}
+
+/**
+ * Sanitize ORDER BY clause to only allow safe column names and directions
+ */
+function sanitizeOrderBy(orderBy: string): string | null {
+  // Match pattern: "column_name ASC|DESC" or just "column_name"
+  // Allow multiple columns separated by comma
+  const columns = orderBy.split(',').map(col => col.trim());
+
+  const sanitized = columns.map(col => {
+    const match = col.match(/^"?([a-zA-Z0-9_]+)"?\s*(ASC|DESC)?$/i);
+    if (!match) return null;
+
+    const columnName = match[1].replace(/"/g, '""');
+    const direction = match[2] ? ` ${match[2].toUpperCase()}` : '';
+
+    return `"${columnName}"${direction}`;
+  });
+
+  if (sanitized.some(col => col === null)) {
+    console.error('Invalid ORDER BY clause:', orderBy);
+    return null;
+  }
+
+  return sanitized.join(', ');
+}
+
+/**
  * Fast preview query - reads directly from OPFS Parquet without loading from IndexedDB
  * Use this for quick data previews to avoid slow IndexedDB blob loading
  */
@@ -1488,19 +1535,39 @@ export async function queryParquetDirect(
   const db = await initDuckDB();
   const conn = await db.connect();
 
+  // Validate and sanitize limit (prevent DOS attacks with huge limits)
+  const safeLimit = Math.max(1, Math.min(limit, 100000));
+  if (limit !== safeLimit) {
+    console.warn(`queryParquetDirect: limit ${limit} adjusted to safe limit ${safeLimit}`);
+  }
+
+  // Validate WHERE clause to prevent SQL injection
+  if (whereClause && !isValidWhereClause(whereClause)) {
+    throw new Error('Invalid WHERE clause: potentially unsafe SQL detected');
+  }
+
+  // Sanitize ORDER BY clause
+  let sanitizedOrderBy: string | null = null;
+  if (orderBy) {
+    sanitizedOrderBy = sanitizeOrderBy(orderBy);
+    if (!sanitizedOrderBy) {
+      throw new Error('Invalid ORDER BY clause: must be valid column name(s) with optional ASC/DESC');
+    }
+  }
+
   // Construct OPFS Parquet path (csvId already has csv- prefix, just clean it)
   const parquetName = `${csvId.replace(/[^a-zA-Z0-9]/g, '_')}.parquet`;
   const opfsPath = `opfs:/duckdb/${parquetName}`;
 
-  // Build SQL query
+  // Build SQL query with validated inputs
   let sql = `SELECT * FROM read_parquet('${opfsPath}')`;
   if (whereClause) {
     sql += ` WHERE ${whereClause}`;
   }
-  if (orderBy) {
-    sql += ` ORDER BY ${orderBy}`;
+  if (sanitizedOrderBy) {
+    sql += ` ORDER BY ${sanitizedOrderBy}`;
   }
-  sql += ` LIMIT ${limit}`;
+  sql += ` LIMIT ${safeLimit}`;
 
   try {
     // Query directly from Parquet - no IndexedDB loading needed
@@ -1513,15 +1580,15 @@ export async function queryParquetDirect(
       const tableName = csvId.replace(/[^a-zA-Z0-9]/g, '_');
       const escapedTableName = tableName.replace(/"/g, '""');
 
-      // Build SQL with table instead of Parquet
+      // Build SQL with table instead of Parquet (reuse validated clauses)
       let tableSql = `SELECT * FROM "${escapedTableName}"`;
       if (whereClause) {
         tableSql += ` WHERE ${whereClause}`;
       }
-      if (orderBy) {
-        tableSql += ` ORDER BY ${orderBy}`;
+      if (sanitizedOrderBy) {
+        tableSql += ` ORDER BY ${sanitizedOrderBy}`;
       }
-      tableSql += ` LIMIT ${limit}`;
+      tableSql += ` LIMIT ${safeLimit}`;
 
       const result = await conn.query(tableSql);
       return result.toArray().map((row: any) => row.toJSON());
@@ -2015,7 +2082,8 @@ export async function processParquetWithDuckDB(
 export async function processExcelWithDuckDB(
   file: File,
   onProgress?: (progress: { file: string; percent: number; rows?: number; message?: string }) => void,
-  existingFileId?: string
+  existingFileId?: string,
+  convertToParquet: boolean = true  // NEW: Allow skipping Parquet conversion
 ): Promise<{
   headers: string[];
   rowCount: number;
@@ -2091,7 +2159,8 @@ export async function processExcelWithDuckDB(
 export async function processJSONWithDuckDB(
   file: File,
   onProgress?: (progress: { file: string; percent: number; rows?: number; message?: string }) => void,
-  existingFileId?: string
+  existingFileId?: string,
+  convertToParquet: boolean = true  // NEW: Allow skipping Parquet conversion
 ): Promise<{
   headers: string[];
   rowCount: number;

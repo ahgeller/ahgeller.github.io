@@ -4,6 +4,11 @@ export interface ExecutionResult {
   success: boolean;
   result?: any;
   error?: string;
+  errorStack?: string;
+  errorDetails?: {
+    name: string;
+    cause?: unknown;
+  };
   executionTime?: number;
 }
 
@@ -13,6 +18,15 @@ export interface CodeBlock {
   endIndex: number;
   type: 'execute' | 'query' | 'javascript' | 'xml' | 'js' | 'code';
   isComplete: boolean;
+}
+
+export interface DataRow {
+  [key: string]: string | number | boolean | null | undefined;
+}
+
+export interface QueryError extends Error {
+  code?: string;
+  details?: unknown;
 }
 
 // Hoisted regex patterns for better performance (compiled once, not on every call)
@@ -771,9 +785,11 @@ export class CodeExecutor {
           return result;
         } catch (error: any) {
           const errorMsg = error?.message || 'Unknown error';
-          // Extract useful info from DuckDB errors
-          // Show raw DuckDB error without extra help messages
-          throw new Error(errorMsg);
+          // Preserve stack trace and original error for debugging
+          const enhancedError = new Error(errorMsg);
+          enhancedError.stack = error?.stack || enhancedError.stack;
+          (enhancedError as any).cause = error; // Preserve original error
+          throw enhancedError;
         }
       };
 
@@ -1054,6 +1070,11 @@ export class CodeExecutor {
       return {
         success: false,
         error: errorMessage,
+        errorStack: error.stack, // Preserve stack trace for debugging
+        errorDetails: {
+          name: error.name,
+          cause: error.cause
+        },
         executionTime
       };
     }

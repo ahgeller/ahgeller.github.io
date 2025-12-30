@@ -1482,9 +1482,15 @@ const ChatMain = ({
                             if (isDuckDBInitialized()) {
                               try {
                                 data = await queryParquetDirect(selectedCsvIds[0], 500) || [];
-                              } catch {
-                                data = await getCsvDataRows(selectedFile, undefined, true);
-                                data = data.slice(0, 500);
+                              } catch (parquetError) {
+                                console.warn('Fast Parquet query failed, falling back to IndexedDB:', parquetError);
+                                try {
+                                  data = await getCsvDataRows(selectedFile, undefined, true);
+                                  data = data.slice(0, 500);
+                                } catch (indexedDbError) {
+                                  console.error('IndexedDB fallback also failed:', indexedDbError);
+                                  throw new Error('Failed to load data from both Parquet and IndexedDB');
+                                }
                               }
                             } else {
                               data = await getCsvDataRows(selectedFile, undefined, true);
@@ -1492,7 +1498,7 @@ const ChatMain = ({
                             }
                           }
                         } catch (error) {
-                          console.warn('Preview: Initial load failed, trying fallback:', error);
+                          console.error('Preview: Data load failed:', error);
                           try {
                             data = await getCsvDataRows(selectedFile, undefined, true);
                             data = data.slice(0, 500);

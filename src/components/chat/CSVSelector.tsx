@@ -31,6 +31,7 @@ interface CSVFile {
   fileBlob?: Blob;
   tableName?: string; // DuckDB table name for efficient querying
   size?: number; // Original file size in bytes
+  isParquet?: boolean; // Whether the file is stored in Parquet format
 }
 
 type ColumnMode = 'group' | 'display';
@@ -102,6 +103,12 @@ const CSVSelector = ({ selectedCsvIds, selectedFilterColumns, selectedFilterValu
   const [largeFileConfirmations, setLargeFileConfirmations] = useState<Set<string>>(new Set()); // Track confirmed large files
   const [pendingLargeFileColumn, setPendingLargeFileColumn] = useState<{ column: string, fileSizeGB: number } | null>(null);
   const [isInitializingDuckDB, setIsInitializingDuckDB] = useState(false);
+  const [pendingParquetConversion, setPendingParquetConversion] = useState<{
+    file: File;
+    csvFileId: string;
+    fileExtension: string;
+    onConfirm: (convert: boolean) => void;
+  } | null>(null);
 
   useEffect(() => {
     const loadCsvFiles = async () => {
@@ -119,6 +126,8 @@ const CSVSelector = ({ selectedCsvIds, selectedFilterColumns, selectedFilterValu
             hasDuckDB: meta.hasDuckDB || false,
             tableName: meta.tableName || undefined,
             size: meta.size || undefined,
+            // Legacy files (no isParquet property) were all converted to Parquet by default
+            isParquet: meta.isParquet !== undefined ? meta.isParquet : true,
             data: [],
           }));
           
@@ -154,12 +163,10 @@ const CSVSelector = ({ selectedCsvIds, selectedFilterColumns, selectedFilterValu
                   const storageKey = `db_csv_data_${file.id}`;
                   const existingData = localStorage.getItem(storageKey);
                   if (!existingData) {
-                    console.log('CSVSelector: File has data but not in storage, saving it...', file.name);
                     try {
                       const headers = file.headers || (file.data[0] ? Object.keys(file.data[0]) : []);
                       const csvText = stringifyCsv(headers, file.data);
                       await saveCsvDataText(file.id, csvText, file.data);
-                      console.log('CSVSelector: Successfully saved data for', file.name);
                     } catch (e) {
                       console.error('CSVSelector: Error saving file data:', e);
                     }
@@ -188,9 +195,13 @@ const CSVSelector = ({ selectedCsvIds, selectedFilterColumns, selectedFilterValu
             // Migrate to IndexedDB and clear localStorage
             if (cleanedFiles.length > 0) {
               try {
-                await saveAllCsvFileMetadata(cleanedFiles);
+                // Ensure all migrated files have isParquet property (default to true for legacy files)
+                const filesWithParquet = cleanedFiles.map(f => ({
+                  ...f,
+                  isParquet: f.isParquet !== undefined ? f.isParquet : true
+                }));
+                await saveAllCsvFileMetadata(filesWithParquet);
                 localStorage.removeItem("db_csv_files");
-                console.log('CSVSelector: Migrated CSV metadata to IndexedDB');
               } catch (e) {
                 console.error('CSVSelector: Error migrating to IndexedDB:', e);
                 if (needsSave) {
@@ -250,6 +261,8 @@ const CSVSelector = ({ selectedCsvIds, selectedFilterColumns, selectedFilterValu
       const success = await safeInitializeDuckDB();
       if (success) {
         console.log('✅ DuckDB initialized for enhanced CSV processing');
+        // Clear any previous error status
+        setUploadStatus({ status: 'idle' });
       } else {
         console.error('❌ DuckDB initialization failed - DuckDB is required for data file processing');
         setUploadStatus({
@@ -259,9 +272,9 @@ const CSVSelector = ({ selectedCsvIds, selectedFilterColumns, selectedFilterValu
       }
     } catch (error) {
       console.error('❌ DuckDB initialization error:', error);
-      setUploadStatus({ 
-        status: 'error', 
-        message: `DuckDB initialization failed: ${error instanceof Error ? error.message : 'Unknown error'}. Please refresh the page and try again.`, 
+      setUploadStatus({
+        status: 'error',
+        message: `DuckDB initialization failed: ${error instanceof Error ? error.message : 'Unknown error'}. Please refresh the page and try again.`,
       });
     } finally {
       setIsInitializingDuckDB(false);
@@ -346,6 +359,39 @@ const CSVSelector = ({ selectedCsvIds, selectedFilterColumns, selectedFilterValu
           // Generate the ID first, then pass it to the appropriate processor
           const csvFileId = generatePrefixedId('csv');
 
+          // Ask user if they want to convert to Parquet (unless already Parquet)
+          let convertToParquet = true;
+          if (fileExtension !== 'parquet') {
+            // Show custom confirmation UI in upload status
+            setUploadStatus({
+              status: 'reading',
+              message: `Convert "${file.name}" to Parquet format?`,
+              fileName: file.name
+            });
+
+            // Wait for user confirmation via custom UI
+            convertToParquet = await new Promise<boolean>((resolve) => {
+              setPendingParquetConversion({
+                file,
+                csvFileId,
+                fileExtension,
+                onConfirm: resolve
+              });
+            });
+
+            // Show user's choice
+            setUploadStatus({
+              status: 'reading',
+              message: convertToParquet
+                ? `✓ Will convert to Parquet for better performance`
+                : `✗ Skipping Parquet conversion`,
+              fileName: file.name
+            });
+
+            // Brief pause to show the user's choice
+            await new Promise(resolve => setTimeout(resolve, 800));
+          }
+
           // Route to appropriate processor based on file type
           let result;
           if (fileExtension === 'parquet') {
@@ -365,7 +411,7 @@ const CSVSelector = ({ selectedCsvIds, selectedFilterColumns, selectedFilterValu
                 fileName: progress.file,
                 percent: progress.percent,
               });
-            }, csvFileId);
+            }, csvFileId, convertToParquet);
           } else if (fileExtension === 'json') {
             result = await processJSONWithDuckDB(file, (progress) => {
               setUploadStatus({
@@ -374,7 +420,7 @@ const CSVSelector = ({ selectedCsvIds, selectedFilterColumns, selectedFilterValu
                 fileName: progress.file,
                 percent: progress.percent,
               });
-            }, csvFileId);
+            }, csvFileId, convertToParquet);
           } else {
             // Default to CSV processing
             result = await processCSVWithDuckDB(file, (progress) => {
@@ -384,7 +430,7 @@ const CSVSelector = ({ selectedCsvIds, selectedFilterColumns, selectedFilterValu
                 fileName: progress.file,
                 percent: progress.percent,
               });
-            }, csvFileId);
+            }, csvFileId, convertToParquet);
           }
         
           const csvFile: CSVFile = {
@@ -397,6 +443,7 @@ const CSVSelector = ({ selectedCsvIds, selectedFilterColumns, selectedFilterValu
             fileBlob: result.fileBlob,
             data: result.data,
             tableName: (result as any).tableName, // Store DuckDB table name
+            isParquet: fileExtension === 'parquet' || convertToParquet, // Track if stored as Parquet
           };
           
           // Save the file to IndexedDB
@@ -416,7 +463,7 @@ const CSVSelector = ({ selectedCsvIds, selectedFilterColumns, selectedFilterValu
           
           const updatedFiles = [...csvFiles, csvFile];
           setCsvFiles(updatedFiles);
-          // Save metadata to IndexedDB (without data arrays to avoid localStorage quota)
+          // Save only the new file's metadata to IndexedDB (efficient single-file save)
           try {
             await saveCsvFileMetadata({
               id: csvFile.id,
@@ -426,22 +473,12 @@ const CSVSelector = ({ selectedCsvIds, selectedFilterColumns, selectedFilterValu
               uploadedAt: csvFile.uploadedAt,
               hasDuckDB: csvFile.hasDuckDB,
               tableName: csvFile.tableName,
+              isParquet: csvFile.isParquet,
             });
-            await saveAllCsvFileMetadata(updatedFiles.map(f => ({
-              id: f.id,
-              name: f.name,
-              headers: f.headers,
-              rowCount: f.rowCount,
-              uploadedAt: f.uploadedAt,
-              hasDuckDB: f.hasDuckDB || false,
-              tableName: f.tableName,
-            })));
           } catch (metadataError) {
             console.error('CSVSelector: Error saving metadata to IndexedDB:', metadataError);
           }
-          
-          console.log("CSVSelector: File uploaded successfully with DuckDB:", csvFile.name, "Rows:", result.rowCount, "ID:", csvFile.id);
-          
+
           // Reset status after brief delay
           setTimeout(() => setUploadStatus({ status: 'idle' }), 1000);
           return;
@@ -2317,12 +2354,38 @@ const CSVSelector = ({ selectedCsvIds, selectedFilterColumns, selectedFilterValu
             )}
         </Button>
           {uploadStatus.status !== 'idle' && uploadStatus.message && (
-            <div className={`text-xs whitespace-nowrap ${
-              uploadStatus.status === 'error' ? 'text-red-400' : 
-              uploadStatus.status === 'success' ? 'text-green-400' : 
-              'text-blue-400'
-            }`}>
-              {uploadStatus.message}
+            <div className="flex items-center gap-2">
+              <div className={`text-xs whitespace-nowrap ${
+                uploadStatus.status === 'error' ? 'text-red-400' :
+                uploadStatus.status === 'success' ? 'text-green-400' :
+                'text-blue-400'
+              }`}>
+                {uploadStatus.message}
+              </div>
+              {pendingParquetConversion && (
+                <div className="flex items-center gap-1">
+                  <button
+                    onClick={() => {
+                      pendingParquetConversion.onConfirm(true);
+                      setPendingParquetConversion(null);
+                    }}
+                    className="px-2 py-0.5 text-xs bg-green-500/20 hover:bg-green-500/30 text-green-400 rounded border border-green-500/50 transition-colors"
+                    title="Convert to Parquet (faster queries, compressed storage)"
+                  >
+                    ✓ Yes
+                  </button>
+                  <button
+                    onClick={() => {
+                      pendingParquetConversion.onConfirm(false);
+                      setPendingParquetConversion(null);
+                    }}
+                    className="px-2 py-0.5 text-xs bg-red-500/20 hover:bg-red-500/30 text-red-400 rounded border border-red-500/50 transition-colors"
+                    title="Keep original format"
+                  >
+                    ✗ No
+                  </button>
+                </div>
+              )}
             </div>
           )}
         </div>
@@ -2431,7 +2494,7 @@ const CSVSelector = ({ selectedCsvIds, selectedFilterColumns, selectedFilterValu
                               <span className="truncate" style={{ fontSize: '13px' }}>{file.name}</span>
                             </div>
                             <span className="text-muted-foreground ml-2 flex-shrink-0" style={{ fontSize: '11px' }}>
-                              ({(file.rowCount ?? file.data?.length ?? 0).toLocaleString()} rows, {file.headers.length} cols • Parquet)
+                              ({(file.rowCount ?? file.data?.length ?? 0).toLocaleString()} rows, {file.headers.length} cols • {file.isParquet ? 'Parquet' : (file.name.split('.').pop()?.toUpperCase() || 'Data')})
                             </span>
                           </div>
                         </button>

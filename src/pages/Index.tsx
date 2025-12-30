@@ -7,7 +7,6 @@ import ApiKeySettings from "@/components/settings/ApiKeySettings";
 import DatabaseSettings from "@/components/settings/DatabaseSettings";
 import { Chat, Message } from "@/types/chat";
 import { initVolleyballDB } from "@/lib/database";
-import { cleanupValueInfosForDeletedChats, deleteValueInfoForChat } from "@/lib/chatApi";
 import { cleanupUnusedDuckDBTables } from "@/lib/duckdb";
 import { loadAllChats, saveAllChats, saveChat, deleteChat as deleteChatFromDB, migrateFromLocalStorage } from "@/lib/chatStorage";
 import { CommandPalette, useCommandPalette, Command } from "@/components/ui/command-palette";
@@ -276,10 +275,9 @@ const Index = () => {
       } catch (error) {
         console.warn('Failed to clear LangChain memory for deleted chat:', error);
       }
-      
-      // Clean up valueInfo for deleted chat
-      deleteValueInfoForChat(chatId);
-      cleanupValueInfosForDeletedChats();
+
+      // NOTE: Value info is NOT deleted when chats are deleted
+      // Value info should only be deleted by explicit user action
       
       // Clean up DuckDB tables for CSVs no longer used by any chat
       if (csvIdsToCheck.length > 0) {

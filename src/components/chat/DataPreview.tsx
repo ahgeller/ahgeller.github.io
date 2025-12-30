@@ -30,6 +30,7 @@ export function DataPreview({ isOpen, onClose, data: initialData, fileName, head
   const [jumpToRow, setJumpToRow] = useState<string>("");
   const [isAnimating, setIsAnimating] = useState(false);
   const [isLoadingMore, setIsLoadingMore] = useState(false);
+  const searchIdRef = useRef(0); // Track search version to prevent race conditions
   const [isSearching, setIsSearching] = useState(false);
   const [searchResults, setSearchResults] = useState<any[] | null>(null);
   const [hasLoadedAll, setHasLoadedAll] = useState(false);
@@ -75,25 +76,24 @@ export function DataPreview({ isOpen, onClose, data: initialData, fileName, head
     return headers.filter(h => h !== '__index');
   }, [headers]);
   
-  // Calculate column statistics
+  // Calculate column statistics (only on base data, not search results for performance)
   const columnStats = useMemo(() => {
-    const sourceData = searchResults || data;
-    if (!sourceData || sourceData.length === 0) return {};
-    
+    if (!data || data.length === 0) return {};
+
     const stats: Record<string, any> = {};
-    const sampleSize = Math.min(1000, sourceData.length);
-    const sampleData = sourceData.slice(0, sampleSize);
-    
+    const sampleSize = Math.min(1000, data.length);
+    const sampleData = data.slice(0, sampleSize);
+
     visibleHeaders.forEach(header => {
       const values = sampleData.map(row => row[header]).filter(v => v !== null && v !== undefined && v !== '');
       const numericValues = values.map(v => Number(v)).filter(v => !isNaN(v));
-      
+
       const isNumeric = numericValues.length > values.length * 0.8;
       const isDate = !isNumeric && values.slice(0, 10).some(v => {
         const str = String(v);
         return str.match(/^\d{4}-\d{2}-\d{2}/) || str.match(/^\d{1,2}\/\d{1,2}\/\d{2,4}/);
       });
-      
+
       stats[header] = {
         type: isNumeric ? 'number' : isDate ? 'date' : 'text',
         count: values.length,
@@ -106,9 +106,32 @@ export function DataPreview({ isOpen, onClose, data: initialData, fileName, head
         })
       };
     });
-    
+
     return stats;
-  }, [data, searchResults, visibleHeaders]);
+  }, [data, visibleHeaders]); // Only recalc when base data changes, not search results
+
+  // Helper: Escape LIKE pattern to prevent SQL injection via wildcards
+  const escapeLikePattern = useCallback((pattern: string): string => {
+    return pattern
+      .replace(/\\/g, '\\\\')  // Escape backslash first
+      .replace(/%/g, '\\%')     // Escape percent wildcard
+      .replace(/_/g, '\\_')     // Escape underscore wildcard
+      .replace(/'/g, "''");     // Escape single quotes
+  }, []);
+
+  // Helper: Filter data locally (reusable for fallback and non-csvId cases)
+  const filterDataLocally = useCallback((searchText: string, column: string) => {
+    const searchLower = searchText.toLowerCase();
+    return data.filter(row => {
+      if (column === "__all__") {
+        return visibleHeaders.some(header =>
+          String(row[header] ?? '').toLowerCase().includes(searchLower)
+        );
+      } else {
+        return String(row[column] ?? '').toLowerCase().includes(searchLower);
+      }
+    });
+  }, [data, visibleHeaders]);
 
   // Debounced search - searches ALL data via DuckDB using FAST Parquet query
   useEffect(() => {
@@ -124,60 +147,64 @@ export function DataPreview({ isOpen, onClose, data: initialData, fileName, head
     }
 
     setIsSearching(true);
+    const currentSearchId = ++searchIdRef.current; // Increment to track this search
+
     searchTimeoutRef.current = setTimeout(async () => {
       try {
         if (csvId) {
+          // Validate searchColumn is safe
+          if (searchColumn !== "__all__" && !visibleHeaders.includes(searchColumn)) {
+            console.error('Invalid search column:', searchColumn);
+            throw new Error('Invalid search column');
+          }
+
           // FAST: Use queryParquetDirect to search entire dataset
           const { queryParquetDirect } = await import('@/lib/duckdb');
 
-          // Escape search term properly for SQL
-          const searchLower = searchTerm.toLowerCase().replace(/'/g, "''").replace(/\\/g, '\\\\');
+          // Properly escape search term for SQL LIKE pattern
+          const searchLower = escapeLikePattern(searchTerm.toLowerCase());
 
           // Build WHERE clause - search specific column or all columns
           let whereConditions: string;
           if (searchColumn === "__all__") {
             // Search all columns
             whereConditions = visibleHeaders.map(h =>
-              `LOWER(CAST("${h.replace(/"/g, '""')}" AS VARCHAR)) LIKE '%${searchLower}%'`
+              `LOWER(CAST("${h.replace(/"/g, '""')}" AS VARCHAR)) LIKE '%${searchLower}%' ESCAPE '\\'`
             ).join(' OR ');
           } else {
             // Search specific column only
-            whereConditions = `LOWER(CAST("${searchColumn.replace(/"/g, '""')}" AS VARCHAR)) LIKE '%${searchLower}%'`;
+            whereConditions = `LOWER(CAST("${searchColumn.replace(/"/g, '""')}" AS VARCHAR)) LIKE '%${searchLower}%' ESCAPE '\\'`;
           }
 
           const results = await queryParquetDirect(csvId, 5000, whereConditions);
-          setSearchResults(results || []);
+
+          // Only update if this search is still current (prevent race condition)
+          if (currentSearchId === searchIdRef.current) {
+            setSearchResults(results || []);
+            setCurrentPage(1);
+          }
         } else {
           // Fallback: search loaded data only
-          const searchLower = searchTerm.toLowerCase();
-          const filtered = data.filter(row => {
-            if (searchColumn === "__all__") {
-              return visibleHeaders.some(header =>
-                String(row[header] ?? '').toLowerCase().includes(searchLower)
-              );
-            } else {
-              return String(row[searchColumn] ?? '').toLowerCase().includes(searchLower);
-            }
-          });
-          setSearchResults(filtered);
-        }
-        setCurrentPage(1);
-      } catch (error: any) {
-        // Fallback to local search
-        const searchLower = searchTerm.toLowerCase();
-        const filtered = data.filter(row => {
-          if (searchColumn === "__all__") {
-            return visibleHeaders.some(header =>
-              String(row[header] ?? '').toLowerCase().includes(searchLower)
-            );
-          } else {
-            return String(row[searchColumn] ?? '').toLowerCase().includes(searchLower);
+          const filtered = filterDataLocally(searchTerm, searchColumn);
+
+          if (currentSearchId === searchIdRef.current) {
+            setSearchResults(filtered);
+            setCurrentPage(1);
           }
-        });
-        setSearchResults(filtered);
-        setCurrentPage(1);
+        }
+      } catch (error: any) {
+        // Only update on error if this search is still current
+        if (currentSearchId === searchIdRef.current) {
+          // Fallback to local search
+          const filtered = filterDataLocally(searchTerm, searchColumn);
+          setSearchResults(filtered);
+          setCurrentPage(1);
+        }
       } finally {
-        setIsSearching(false);
+        // Only update loading state if this search is still current
+        if (currentSearchId === searchIdRef.current) {
+          setIsSearching(false);
+        }
       }
     }, 300);
 
@@ -186,7 +213,7 @@ export function DataPreview({ isOpen, onClose, data: initialData, fileName, head
         clearTimeout(searchTimeoutRef.current);
       }
     };
-  }, [searchTerm, searchColumn, csvId, visibleHeaders, data]);
+  }, [searchTerm, searchColumn, csvId, visibleHeaders, escapeLikePattern, filterDataLocally]);
 
   // Load more data for pagination - FAST query from Parquet
   const loadMoreData = useCallback(async (targetPage: number) => {

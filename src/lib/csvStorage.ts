@@ -1591,6 +1591,7 @@ export const saveCsvFileMetadata = async (csvFile: {
   tableName?: string;
   size?: number;
   type?: string;
+  isParquet?: boolean;
 }): Promise<void> => {
   try {
     const db = await initDB();
@@ -1608,6 +1609,7 @@ export const saveCsvFileMetadata = async (csvFile: {
       tableName: csvFile.tableName || null,
       size: csvFile.size || null,
       type: csvFile.type || null,
+      isParquet: csvFile.isParquet ?? false,
     };
     
     await new Promise<void>((resolve, reject) => {
@@ -1687,6 +1689,7 @@ export const saveAllCsvFileMetadata = async (files: any[]): Promise<void> => {
         uploadedAt: file.uploadedAt || Date.now(),
         hasDuckDB: file.hasDuckDB || false,
         tableName: file.tableName || null,
+        isParquet: file.isParquet ?? false,
       };
       return new Promise<void>((resolve, reject) => {
         const request = store.put(metadata);
