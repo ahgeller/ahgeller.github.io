@@ -157,6 +157,44 @@ function DirectECharts({
         ...fixedOption,
         // Preserve the fixed series
         series: fixedOption.series,
+        // Enhanced color palette for better visual appeal
+        color: [
+          '#5470c6', '#91cc75', '#fac858', '#ee6666', '#73c0de',
+          '#3ba272', '#fc8452', '#9a60b4', '#ea7ccc', '#d4a373'
+        ],
+        // Enhanced title styling
+        title: fixedOption.title ? {
+          ...fixedOption.title,
+          textStyle: {
+            color: '#fff',
+            fontSize: 16,
+            fontWeight: 'bold',
+            ...(fixedOption.title as any)?.textStyle
+          },
+          subtextStyle: {
+            color: 'rgba(255, 255, 255, 0.7)',
+            fontSize: 12,
+            ...(fixedOption.title as any)?.subtextStyle
+          }
+        } : undefined,
+        // Enhanced tooltip
+        tooltip: {
+          trigger: 'axis',
+          axisPointer: {
+            type: 'cross',
+            label: {
+              backgroundColor: '#6a7985'
+            }
+          },
+          backgroundColor: 'rgba(0, 0, 0, 0.8)',
+          borderColor: '#777',
+          borderWidth: 1,
+          textStyle: {
+            color: '#fff',
+            fontSize: 12
+          },
+          ...fixedOption.tooltip
+        },
         animation: true,
         animationDuration: 800,
         animationEasing: 'cubicOut' as const,
@@ -171,7 +209,7 @@ function DirectECharts({
               title: { zoom: 'Area Zoom', back: 'Reset Zoom' }
             },
             restore: { title: 'Restore' },
-            saveAsImage: { 
+            saveAsImage: {
               title: 'Download',
               pixelRatio: 2,
               backgroundColor: '#1a1a1a'

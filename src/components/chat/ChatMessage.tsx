@@ -766,41 +766,41 @@ const ChatMessage = memo(({ message, sidebarOpen }: ChatMessageProps) => {
 
 // Extract markdown components to reuse
 const markdownComponents = {
-  p: ({ children }: any) => <p className="mb-3 last:mb-0 leading-relaxed">{children}</p>,
-  ul: ({ children }: any) => <ul className="list-disc pl-4 mb-2">{children}</ul>,
-  ol: ({ children }: any) => <ol className="list-decimal pl-4 mb-2">{children}</ol>,
-  li: ({ children }: any) => <li className="mb-1">{children}</li>,
-  h1: ({ children }: any) => <h1 className="text-xl font-bold mb-2">{children}</h1>,
-  h2: ({ children }: any) => <h2 className="text-lg font-bold mb-2">{children}</h2>,
-  h3: ({ children }: any) => <h3 className="text-base font-bold mb-2">{children}</h3>,
+  p: ({ children }: any) => <p className="mb-4 last:mb-0 leading-relaxed text-foreground/90">{children}</p>,
+  ul: ({ children }: any) => <ul className="list-disc pl-6 mb-4 space-y-2">{children}</ul>,
+  ol: ({ children }: any) => <ol className="list-decimal pl-6 mb-4 space-y-2">{children}</ol>,
+  li: ({ children }: any) => <li className="leading-relaxed text-foreground/90">{children}</li>,
+  h1: ({ children }: any) => <h1 className="text-2xl font-bold mb-4 mt-6 text-foreground border-b border-border/30 pb-2">{children}</h1>,
+  h2: ({ children }: any) => <h2 className="text-xl font-bold mb-3 mt-5 text-foreground">{children}</h2>,
+  h3: ({ children }: any) => <h3 className="text-lg font-semibold mb-2 mt-4 text-foreground/95">{children}</h3>,
   table: ({ children }: any) => (
-    <div className="overflow-x-auto my-4">
-      <table className="min-w-full border-collapse border border-border/50">
+    <div className="overflow-x-auto my-4 rounded-lg border border-border/50 shadow-lg">
+      <table className="min-w-full border-collapse">
         {children}
       </table>
     </div>
   ),
   thead: ({ children }: any) => (
-    <thead className="bg-black/20">{children}</thead>
+    <thead className="bg-black/40 border-b-2 border-border/70">{children}</thead>
   ),
   tbody: ({ children }: any) => (
-    <tbody>{children}</tbody>
+    <tbody className="bg-black/10">{children}</tbody>
   ),
   tr: ({ children }: any) => (
-    <tr className="border-b border-border/30 hover:bg-black/10">{children}</tr>
+    <tr className="border-b border-border/20 hover:bg-black/20 transition-colors duration-150">{children}</tr>
   ),
   th: ({ children }: any) => (
-    <th className="border border-border/50 px-4 py-2 text-left font-semibold bg-black/30">
+    <th className="px-6 py-3 text-left font-semibold text-sm uppercase tracking-wider text-foreground/90">
       {children}
     </th>
   ),
   td: ({ children }: any) => (
-    <td className="border border-border/50 px-4 py-2">
+    <td className="px-6 py-4 text-sm text-foreground/80">
       {children}
     </td>
   ),
   pre: ({ children }: any) => (
-    <pre className="bg-black/40 p-4 rounded-lg text-sm my-3 overflow-x-auto block w-full font-mono border border-border/30 mac-code-render">
+    <pre className="bg-black/50 p-4 rounded-lg text-sm my-4 overflow-x-auto block w-full font-mono border border-border/40 shadow-md mac-code-render">
       {children}
     </pre>
   ),
@@ -809,24 +809,24 @@ const markdownComponents = {
     const hasLanguageClass = className && className.startsWith('language-');
     const childString = typeof children === 'string' ? children : String(children);
     const hasMultipleLines = childString.includes('\n');
-    
+
     // It's a code block if it has a language class OR if it contains multiple lines
     const isCodeBlock = hasLanguageClass || hasMultipleLines;
-    
+
     if (!isCodeBlock) {
       // Inline code - single line, no language class
       return (
-        <code 
-          className="bg-gray-700/60 px-1.5 py-0.5 rounded text-sm font-mono" 
+        <code
+          className="bg-gray-700/70 px-2 py-0.5 rounded text-sm font-mono text-primary-foreground"
           {...props}
         >
           {children}
         </code>
       );
     }
-    
+
     // Code block - has language class or multiple lines
-    return <code className="font-mono text-sm" {...props}>{children}</code>;
+    return <code className="font-mono text-sm text-foreground/95" {...props}>{children}</code>;
   },
   a: ({ children, href }: any) => (
     <a
@@ -838,8 +838,14 @@ const markdownComponents = {
       {children}
     </a>
   ),
+  strong: ({ children }: any) => (
+    <strong className="font-semibold text-foreground">{children}</strong>
+  ),
+  em: ({ children }: any) => (
+    <em className="italic text-foreground/90">{children}</em>
+  ),
   blockquote: ({ children }: any) => (
-    <blockquote className="border-l-4 border-border/50 pl-4 my-2 italic text-muted-foreground">
+    <blockquote className="border-l-4 border-primary/50 bg-primary/5 pl-4 pr-4 py-2 my-4 italic text-foreground/80 rounded-r">
       {children}
     </blockquote>
   ),

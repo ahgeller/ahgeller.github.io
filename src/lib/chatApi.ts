@@ -4475,7 +4475,7 @@ The results above are from your fixed code. Check if they answer the user's ques
 
 **CODE EXECUTED:**${codeBlocksSection}
 
-**RESULTS:**${executionResultsSection}
+**RESULTS:**${executionResultsSection}${chartCreated ? '\n\n**📊 CHART DETECTED:** A chart/visualization was successfully created and is displayed above. When you provide your response, explain what the graph shows, important data points, patterns, trends, and the significance of the visualization.' : ''}
 
 **User's Original Question:** "${originalUserMessage}"
 
@@ -5267,7 +5267,7 @@ Do NOT include Block 1 again!`;
 
 **CODE EXECUTED:**${codeBlocksSection}
 **RESULTS:**${executionResultsSection}
-${followupChartCreated ? '**✅ NOTE:** A chart/visualization was successfully created and is displayed above.\n\n' : ''}
+${followupChartCreated ? '**📊 CHART DETECTED:** A chart/visualization was successfully created and is displayed above. When you provide your response, explain what the graph shows, important data points, patterns, trends, and the significance of the visualization.\n\n' : ''}
 **User's Original Question:** "${originalUserMessage}"
 
 🎯 **YOUR TASK NOW:**
