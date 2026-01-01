@@ -52,15 +52,50 @@ export const API_PROVIDERS: ApiProvider[] = [
   }
 ];
 
-// API Key Storage
+// API Key Storage with encryption
+// Note: While this provides obfuscation, it's not a complete security solution
+// against XSS attacks. For production applications, consider using a backend proxy
+// to handle API keys instead of storing them in the browser.
+
+// Simple encryption/decryption using base64 encoding with XOR cipher
+// This prevents casual inspection but is not cryptographically secure
+function encryptKey(key: string): string {
+  const SECRET = 'volleyball-ai-coach-secret-key-' + window.location.hostname;
+  const encrypted = Array.from(key)
+    .map((char, i) => {
+      const secretChar = SECRET.charCodeAt(i % SECRET.length);
+      return String.fromCharCode(char.charCodeAt(0) ^ secretChar);
+    })
+    .join('');
+  return btoa(encrypted);
+}
+
+function decryptKey(encrypted: string): string {
+  try {
+    const SECRET = 'volleyball-ai-coach-secret-key-' + window.location.hostname;
+    const decoded = atob(encrypted);
+    return Array.from(decoded)
+      .map((char, i) => {
+        const secretChar = SECRET.charCodeAt(i % SECRET.length);
+        return String.fromCharCode(char.charCodeAt(0) ^ secretChar);
+      })
+      .join('');
+  } catch {
+    return encrypted; // Return as-is if decryption fails (backward compatibility)
+  }
+}
+
 export function getApiKey(providerId: string): string | null {
   if (typeof window === 'undefined') return null;
-  return localStorage.getItem(`api_key_${providerId}`);
+  const encrypted = localStorage.getItem(`api_key_${providerId}`);
+  if (!encrypted) return null;
+  return decryptKey(encrypted);
 }
 
 export function setApiKey(providerId: string, apiKey: string): void {
   if (typeof window === 'undefined') return;
-  localStorage.setItem(`api_key_${providerId}`, apiKey);
+  const encrypted = encryptKey(apiKey);
+  localStorage.setItem(`api_key_${providerId}`, encrypted);
 }
 
 export function hasApiKey(providerId: string): boolean {

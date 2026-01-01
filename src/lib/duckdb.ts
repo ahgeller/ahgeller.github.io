@@ -342,11 +342,11 @@ export async function initDuckDB() {
     // Import DuckDB module
     const duckdbModule = await import('@duckdb/duckdb-wasm');
 
-    // Use local EH bundle (fast - modern CPU features)
-    const workerURL = '/duckdb-browser-eh.worker.js';
-    const wasmURL = '/duckdb-eh.wasm';
+    // Use local MVP bundle (compatible - works on all browsers)
+    const workerURL = '/duckdb-browser-mvp.worker.js';
+    const wasmURL = '/duckdb-mvp.wasm';
 
-    console.log('🔧 Initializing DuckDB with local EH bundle (fast)...', { workerURL, wasmURL });
+    console.log('🔧 Initializing DuckDB with local MVP bundle (compatible)...', { workerURL, wasmURL });
 
     // Use AsyncDuckDB - the actual export from the package
     const AsyncDuckDB = duckdbModule.AsyncDuckDB;

@@ -732,7 +732,8 @@ function stripCodeBlocksKeepResults(content: string, preserveCodingRules: boolea
   
   // First, identify and mark EXECUTED code blocks (those followed by execution results)
   // These will be replaced with [Code executed - see results] placeholder
-  const executedPattern = /(```(?:execute|query|javascript|js|code|sql)\s*\n[\s\S]*?```)\s*(?:\n\s*)*(\*\*Code Execution (?:Result|Error)\*\*)/gi;
+  // Use atomic grouping pattern to prevent catastrophic backtracking
+  const executedPattern = /(```(?:execute|query|javascript|js|code|sql)\s*\n(?:[^\`]|`(?!``))*```)\s{0,100}(\*\*Code Execution (?:Result|Error)\*\*)/gi;
   const markers: string[] = [];
   
   stripped = stripped.replace(executedPattern, (_, codeBlock, resultHeader) => {

@@ -55,18 +55,16 @@ const MatchSelector = ({ selectedMatch, selectedFilterColumns, selectedFilterVal
         // Use information_schema to get all columns
         const query = `SELECT column_name FROM information_schema.columns WHERE table_name = '${tableName.replace(/'/g, "''")}' ORDER BY ordinal_position`;
         
-        // Execute dynamic SQL
+        // Execute dynamic SQL - use raw query method for security
         const sql = db as any;
         let result;
-        try {
-          const executeQuery = new Function('sql', `return sql\`${query.replace(/`/g, '\\`')}\``);
+        if (typeof sql.raw === 'function') {
+          result = await sql.raw(query);
+        } else {
+          // Fallback: properly escape query for template literal injection prevention
+          const safeQuery = query.replace(/\\/g, '\\\\').replace(/\$/g, '\\$').replace(/`/g, '\\`');
+          const executeQuery = new Function('sql', `return sql\`${safeQuery}\``);
           result = await executeQuery(sql);
-        } catch (err) {
-          if (typeof sql.raw === 'function') {
-            result = await sql.raw(query);
-          } else {
-            throw err;
-          }
         }
         
         const columnsResult = Array.isArray(result) ? result : (result?.rows || []);
@@ -541,14 +539,16 @@ const MatchSelector = ({ selectedMatch, selectedFilterColumns, selectedFilterVal
           
           const sql = db as any;
           let result;
-          try {
-            const executeQuery = new Function('sql', `return sql\`${query.replace(/`/g, '\\`')}\``);
-            result = await executeQuery(sql);
-          } catch (err) {
-            console.error('Error fetching raw rows for Value Info recreation:', err);
-            if (typeof sql.raw === 'function') {
-              result = await sql.raw(query);
-            } else {
+          if (typeof sql.raw === 'function') {
+            result = await sql.raw(query);
+          } else {
+            // Fallback: properly escape query for template literal injection prevention
+            const safeQuery = query.replace(/\\/g, '\\\\').replace(/\$/g, '\\$').replace(/`/g, '\\`');
+            try {
+              const executeQuery = new Function('sql', `return sql\`${safeQuery}\``);
+              result = await executeQuery(sql);
+            } catch (err) {
+              console.error('Error fetching raw rows for Value Info recreation:', err);
               throw err;
             }
           }
@@ -966,14 +966,16 @@ const MatchSelector = ({ selectedMatch, selectedFilterColumns, selectedFilterVal
           const countQuery = `SELECT COUNT(*) as count FROM ${quotedTable} WHERE ${whereConditions.join(' AND ')}`;
           const sql = db as any;
           let countResult;
-          try {
-            const executeCountQuery = new Function('sql', `return sql\`${countQuery.replace(/`/g, '\\`')}\``);
-            countResult = await executeCountQuery(sql);
-          } catch (err) {
-            console.error('Error fetching row count:', err);
-            if (typeof sql.raw === 'function') {
-              countResult = await sql.raw(countQuery);
-            } else {
+          if (typeof sql.raw === 'function') {
+            countResult = await sql.raw(countQuery);
+          } else {
+            // Fallback: properly escape query for template literal injection prevention
+            const safeCountQuery = countQuery.replace(/\\/g, '\\\\').replace(/\$/g, '\\$').replace(/`/g, '\\`');
+            try {
+              const executeCountQuery = new Function('sql', `return sql\`${safeCountQuery}\``);
+              countResult = await executeCountQuery(sql);
+            } catch (err) {
+              console.error('Error fetching row count:', err);
               throw err;
             }
           }
@@ -985,18 +987,29 @@ const MatchSelector = ({ selectedMatch, selectedFilterColumns, selectedFilterVal
           const query = `SELECT * FROM ${quotedTable} WHERE ${whereConditions.join(' AND ')}`;
           
           let result;
-          try {
-            const executeQuery = new Function('sql', `return sql\`${query.replace(/`/g, '\\`')}\``);
-            result = await executeQuery(sql);
-          } catch (err: any) {
-            // Check for size limit error
-            if (err?.message?.includes('response is too large') || err?.message?.includes('507')) {
-              throw new Error('Selection too large - please select fewer items (database response limit: ~64MB)');
-            }
-            console.error('Error fetching raw rows:', err);
-            if (typeof sql.raw === 'function') {
+          if (typeof sql.raw === 'function') {
+            try {
               result = await sql.raw(query);
-            } else {
+            } catch (err: any) {
+              // Check for size limit error
+              if (err?.message?.includes('response is too large') || err?.message?.includes('507')) {
+                throw new Error('Selection too large - please select fewer items (database response limit: ~64MB)');
+              }
+              console.error('Error fetching raw rows:', err);
+              throw err;
+            }
+          } else {
+            // Fallback: properly escape query for template literal injection prevention
+            const safeQuery = query.replace(/\\/g, '\\\\').replace(/\$/g, '\\$').replace(/`/g, '\\`');
+            try {
+              const executeQuery = new Function('sql', `return sql\`${safeQuery}\``);
+              result = await executeQuery(sql);
+            } catch (err: any) {
+              // Check for size limit error
+              if (err?.message?.includes('response is too large') || err?.message?.includes('507')) {
+                throw new Error('Selection too large - please select fewer items (database response limit: ~64MB)');
+              }
+              console.error('Error fetching raw rows:', err);
               throw err;
             }
           }
