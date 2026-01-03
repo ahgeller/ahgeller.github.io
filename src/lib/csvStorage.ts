@@ -46,7 +46,6 @@ export const initDB = (): Promise<IDBDatabase> => {
     // If cached instance is old version, close it and reinitialize
     if (dbInstance) {
       if (dbInstance.version !== DB_VERSION) {
-        console.warn(`🔄 IndexedDB version mismatch (cached: ${dbInstance.version}, expected: ${DB_VERSION}) - reinitializing...`);
         dbInstance.close();
         dbInstance = null;
       } else {
@@ -101,13 +100,11 @@ export const saveCsvDataBlob = async (
   const fileSizeGB = file.size / (1024 * 1024 * 1024);
   const fileSizeMB = file.size / (1024 * 1024);
   
-  console.log('saveCsvDataBlob (IndexedDB): Saving file as Blob, file ID:', fileId, 'file size:', fileSizeMB.toFixed(1), 'MB');
 
   try {
     const db = await initDB();
     
     if (fileSizeGB > 1) {
-      console.log(`saveCsvDataBlob: Large file detected (${fileSizeGB.toFixed(2)}GB), this may take several minutes...`);
       onProgress?.({ percent: 5, message: `Preparing to save ${fileSizeGB.toFixed(2)}GB file...` });
     }
     
@@ -157,7 +154,6 @@ export const saveCsvDataBlob = async (
       const request = store.put(data);
       
       if (fileSizeGB > 1) {
-        console.log(`saveCsvDataBlob: Starting save for ${fileSizeGB.toFixed(2)}GB file - this may take several minutes...`);
       }
       
       request.onsuccess = () => {
@@ -167,7 +163,6 @@ export const saveCsvDataBlob = async (
         const elapsed = ((Date.now() - startTime) / 1000).toFixed(1);
         const elapsedMin = Math.floor(Number(elapsed) / 60);
         const elapsedSec = (Number(elapsed) % 60).toFixed(0);
-        console.log(`saveCsvDataBlob (IndexedDB): Blob saved successfully, size: ${fileSizeGB.toFixed(2)}GB, took ${elapsedMin}m ${elapsedSec}s`);
         
         onProgress?.({ percent: 100, message: 'Save complete!' });
         resolve();
@@ -214,7 +209,6 @@ export const saveCsvDataBlob = async (
       
       const performIndexing = async () => {
         try {
-          console.log(`saveCsvDataBlob: Starting background indexing for ${fileSizeGB.toFixed(2)}GB file...`);
           const columnIndexes = new Map<string, Set<string>>();
           headers.forEach(col => columnIndexes.set(col, new Set<string>()));
           
@@ -343,23 +337,16 @@ export const saveCsvDataBlob = async (
               rowsProcessed: rowCount
             });
             request.onsuccess = () => {
-              console.log('saveCsvDataBlob: Index stored successfully', {
-                columns: headers.length,
-                totalUniqueValues: Object.values(index).reduce((sum, arr) => sum + arr.length, 0),
-                rowsProcessed: rowCount
-              });
               resolve();
             };
             request.onerror = () => reject(request.error);
           });
         } catch (err) {
-          console.warn('saveCsvDataBlob: Failed to build index (non-critical):', err);
         }
       };
       
       scheduleIndexing();
     } else if (fileSizeGB >= MAX_AUTO_INDEX_SIZE_GB) {
-      console.log(`saveCsvDataBlob: Skipping automatic indexing for large file (${fileSizeGB.toFixed(2)}GB). Index will be built on-demand when needed.`);
     }
   } catch (error) {
     console.error('saveCsvDataBlob (IndexedDB): Error:', error);
@@ -377,7 +364,6 @@ export const saveCsvDataText = async (
   parsedData?: any[]
 ): Promise<void> => {
   const storageKey = `${CSV_DATA_PREFIX}${fileId}`;
-  console.log('saveCsvDataText: Saving data for file ID:', fileId, 'CSV text length:', csvText.length);
 
   try {
     const db = await initDB();
@@ -395,7 +381,6 @@ export const saveCsvDataText = async (
     await new Promise<void>((resolve, reject) => {
       const request = store.put(data);
       request.onsuccess = () => {
-        console.log('saveCsvDataText: Data saved successfully');
         resolve();
       };
       request.onerror = () => {
@@ -407,7 +392,6 @@ export const saveCsvDataText = async (
     try {
       localStorage.setItem(storageKey, csvText);
     } catch (e) {
-      console.warn('saveCsvDataText: Could not save to localStorage backup:', e);
     }
 
     if (parsedData) {
@@ -429,10 +413,8 @@ export const saveCsvDataText = async (
     // SAME PROBLEM - Background indexing WITHOUT proper yielding
     if (headers.length > 0 && fileSizeGB < MAX_AUTO_INDEX_SIZE_GB) {
       buildAndStoreUniqueValuesIndex(fileId, csvText, headers).catch(err => {
-        console.warn('saveCsvDataText: Failed to build index (non-critical):', err);
       });
     } else if (fileSizeGB >= MAX_AUTO_INDEX_SIZE_GB) {
-      console.log(`saveCsvDataText: Skipping automatic indexing for large file (${fileSizeGB.toFixed(2)}GB). Index will be built on-demand when needed.`);
     }
   } catch (error) {
     console.error('saveCsvDataText: Error:', error);
@@ -459,13 +441,11 @@ const ensureMigration = async () => {
           return localStorage.getItem(storageKey) && !f.hasDuckDB;
         });
         if (needsMigration) {
-          console.log('Auto-migrating CSV files to IndexedDB...');
           await migrateAllToIndexedDB();
         }
       }
     }
   } catch (error) {
-    console.warn('Auto-migration failed:', error);
   }
 };
 
@@ -486,12 +466,10 @@ export const getCsvDataRows = async (
     }
     
     const fileName = file.name || 'unknown';
-    console.log(`getCsvDataRows: Starting to read CSV file: ${fileName}`);
     
     // FAST PATH 1: Check in-memory cache first (fastest)
     if (csvDataCache.has(file.id)) {
       const cachedData = csvDataCache.get(file.id)!;
-      console.log(`getCsvDataRows: Using cached data for ${fileName} (${cachedData.length} rows)`);
       if (onProgress) {
         onProgress({ file: fileName, percent: 100, rows: cachedData.length });
       }
@@ -500,7 +478,6 @@ export const getCsvDataRows = async (
     
     // FAST PATH 2: Check if data is embedded in file object
     if (file.data && Array.isArray(file.data) && file.data.length > 0) {
-      console.log(`getCsvDataRows: Using embedded data from file object for ${fileName}`);
       // Cache it for next time
       csvDataCache.set(file.id, file.data);
       manageCacheSize();
@@ -521,7 +498,6 @@ export const getCsvDataRows = async (
           const isRegistered = isFileRegisteredInDuckDB(file.id);
           
           if (isRegistered || (tableName && file.hasDuckDB)) {
-            console.log('getCsvDataRows: Using DuckDB for data retrieval (no blob reading needed), table:', tableName);
             const rows = await queryCSVWithDuckDB(file.id, null, null, (progress) => {
               if (onProgress) {
                 onProgress({
@@ -531,7 +507,6 @@ export const getCsvDataRows = async (
                 });
               }
             });
-            console.log(`getCsvDataRows: DuckDB returned ${rows?.length || 0} rows for ${fileName}`);
             // Cache the results
             if (rows && rows.length > 0) {
               csvDataCache.set(file.id, rows);
@@ -541,14 +516,11 @@ export const getCsvDataRows = async (
           }
         }
       } catch (error) {
-        console.warn('getCsvDataRows: DuckDB not available or failed, falling back to blob reading:', error);
         // Fall through to standard retrieval only if DuckDB fails
       }
     } else {
-      console.log('getCsvDataRows: Skipping DuckDB check (skipDuckDB=true) to prevent recursion');
     }
     if (file.data && Array.isArray(file.data) && file.data.length > 0) {
-      console.log(`getCsvDataRows: Using embedded data directly, rows: ${file.data.length}`);
       if (onProgress) {
         onProgress({ file: fileName, percent: 100, rows: file.data.length });
       }
@@ -576,7 +548,6 @@ export const getCsvDataRows = async (
       if (csvDataCache.has(file.id)) {
         const cachedData = csvDataCache.get(file.id);
         if (cachedData && Array.isArray(cachedData) && cachedData.length > 0) {
-          console.log(`getCsvDataRows: Using cached data for ${fileName}, rows: ${cachedData.length}`);
           if (onProgress) {
             onProgress({ file: fileName, percent: 100, rows: cachedData.length });
           }
@@ -586,7 +557,6 @@ export const getCsvDataRows = async (
       
       if (result.data && Array.isArray(result.data)) {
         // Regular file stored as JSON
-        console.log(`getCsvDataRows: Retrieved ${result.data.length} rows from IndexedDB for ${fileName}`);
         if (onProgress) {
           onProgress({ file: fileName, percent: 100, rows: result.data.length });
         }
@@ -596,13 +566,11 @@ export const getCsvDataRows = async (
         return result.data;
       } else if (result.csvText) {
         // File stored as CSV text - parse it
-        console.log(`getCsvDataRows: Parsing CSV text for ${fileName}, length: ${result.csvText.length}`);
         if (onProgress) {
           onProgress({ file: fileName, percent: 50, message: 'Parsing CSV...' });
         }
         const { parseCsvText } = await import("@/lib/csvUtils");
         const parsedData = parseCsvText(result.csvText).data;
-        console.log(`getCsvDataRows: Parsed ${parsedData.length} rows from CSV text for ${fileName}`);
         // Cache the parsed data
         csvDataCache.set(file.id, parsedData);
         manageCacheSize();
@@ -621,7 +589,6 @@ export const getCsvDataRows = async (
         
         // Try to auto-recover by registering and querying with DuckDB
         const fileSizeMB = (result.fileBlob.size / (1024 * 1024)).toFixed(1);
-        console.log(`⚠️ File ${fileName} is stored as blob (${fileSizeMB}MB) - attempting to auto-register in DuckDB`);
         
         try {
           const { queryCSVWithDuckDB } = await import('./duckdb');
@@ -745,7 +712,6 @@ async function readBlobFile(
   const totalSize = blob.size;
   const fileSizeGB = totalSize / (1024 * 1024 * 1024);
   
-  console.log(`readBlobFile: Reading blob file in chunks (${fileSizeGB.toFixed(2)}GB total)`);
   
   if (onProgress) {
     onProgress({ file: fileName, percent: 0, message: 'Starting to read file...' });
@@ -807,7 +773,6 @@ async function readBlobFile(
     }
     
     const finalResult = parser.finalize();
-    console.log(`readBlobFile: Successfully parsed ${finalResult.data.length} rows from blob file`);
     
     if (onProgress) {
       onProgress({ file: fileName, percent: 100, rows: finalResult.data.length, message: 'Complete!' });
@@ -836,7 +801,6 @@ export const buildAndStoreUniqueValuesIndex = async (
   headers: string[]
 ): Promise<void> => {
   const indexKey = `${CSV_INDEX_PREFIX}${fileId}`;
-  console.log('buildAndStoreUniqueValuesIndex: Building index for file:', fileId, 'columns:', headers.length);
   
   try {
     const db = await initDB();
@@ -908,7 +872,6 @@ export const buildAndStoreUniqueValuesIndex = async (
         totalUniqueValues: Object.values(index).reduce((sum, arr) => sum + arr.length, 0)
       });
       request.onsuccess = () => {
-        console.log('buildAndStoreUniqueValuesIndex: Index stored successfully');
         resolve();
       };
       request.onerror = () => reject(request.error);
@@ -936,7 +899,6 @@ export const getUniqueValuesIndex = async (
     });
     
     if (result && result.indexes && result.indexes[column]) {
-      console.log(`getUniqueValuesIndex: Found cached index for column "${column}" (${result.indexes[column].length} values)`);
       return result.indexes[column];
     }
     
@@ -957,20 +919,16 @@ export const getUniqueValuesFromFile = async (
   onProgress?: (progress: { processedMB: number; uniqueCount: number }) => void
 ): Promise<string[]> => {
   if (!file || !file.id) {
-    console.warn('getUniqueValuesFromFile: Invalid file or missing id', file);
     return [];
   }
 
-  console.log('getUniqueValuesFromFile: Getting unique values for column:', column, 'file:', file.name);
   
   const MAX_UNIQUE_VALUES = 100000;
   
   // Check index first (fast path)
   const indexedValues = await getUniqueValuesIndex(file.id, column);
   if (indexedValues) {
-    console.log(`getUniqueValuesFromFile: Using cached index for column "${column}" (${indexedValues.length} values)`);
     if (indexedValues.length > MAX_UNIQUE_VALUES) {
-      console.log(`getUniqueValuesFromFile: Index has ${indexedValues.length.toLocaleString()} values, limiting to first ${MAX_UNIQUE_VALUES.toLocaleString()} for display`);
       return indexedValues.slice(0, MAX_UNIQUE_VALUES);
     }
     return indexedValues;
@@ -1019,7 +977,6 @@ export const getUniqueValuesFromFile = async (
       }
     }
   } catch (duckdbError) {
-    console.warn('getUniqueValuesFromFile: DuckDB query failed, falling back to CSV text processing:', duckdbError);
     // Don't throw - fall through to CSV text processing fallback
   }
   
@@ -1039,7 +996,6 @@ export const getUniqueValuesFromFile = async (
     });
 
     if (!result) {
-      console.warn('getUniqueValuesFromFile: No data found for file:', file.name);
       return [];
     }
 
@@ -1049,7 +1005,6 @@ export const getUniqueValuesFromFile = async (
 
     const csvText = result.csvText;
     if (!csvText) {
-      console.warn('getUniqueValuesFromFile: No CSV text in result');
       return [];
     }
 
@@ -1062,7 +1017,6 @@ export const getUniqueValuesFromFile = async (
     const columnIndex = headers.findIndex((h: string) => h.toLowerCase() === column.toLowerCase());
     
     if (columnIndex === -1) {
-      console.warn('getUniqueValuesFromFile: Column not found:', column, 'Available columns:', headers);
       return [];
     }
 
@@ -1073,7 +1027,6 @@ export const getUniqueValuesFromFile = async (
     for (let i = 1; i < lines.length; i++) {
       // Early exit if limit reached
       if (uniqueValues.size >= MAX_UNIQUE_VALUES) {
-        console.log(`getUniqueValuesFromFile: Reached ${MAX_UNIQUE_VALUES.toLocaleString()} unique values limit at line ${i.toLocaleString()}`);
         break;
       }
       
@@ -1125,7 +1078,6 @@ export const getUniqueValuesFromFile = async (
       ? resultArray.slice(0, MAX_UNIQUE_VALUES)
       : resultArray;
     
-    console.log(`getUniqueValuesFromFile: Found ${uniqueValues.size.toLocaleString()} unique values for column "${column}"`);
     return limitedResult;
   } catch (error) {
     console.error('getUniqueValuesFromFile: Error:', error);
@@ -1264,7 +1216,6 @@ export const migrateLegacyCsvFile = async (
     const storageKey = `${CSV_DATA_PREFIX}${file.id}`;
     const localData = localStorage.getItem(storageKey);
     if (localData) {
-      console.log("migrateLegacyCsvFile (IndexedDB): Migrating from localStorage");
       try {
         await saveCsvDataText(file.id, localData);
         return { updatedFile: file, migrated: true };
@@ -1275,11 +1226,11 @@ export const migrateLegacyCsvFile = async (
       // Only warn once per file - check if we've already warned about this file
       const warningKey = `migration_warned_${file.id}`;
       if (!sessionStorage.getItem(warningKey)) {
-      console.warn(
-        "migrateLegacyCsvFile (IndexedDB): File",
-        file.name,
-        "has no data in IndexedDB or localStorage. Data may be lost."
-      );
+        console.warn(
+          "migrateLegacyCsvFile (IndexedDB): File",
+          file.name,
+          "has no data in IndexedDB or localStorage. Data may be lost."
+        );
         sessionStorage.setItem(warningKey, 'true');
       }
     }
@@ -1391,12 +1342,10 @@ export const analyzeStorage = async (): Promise<{
             result.orphanedData.push({ key, fileId, size });
             result.estimatedFreedSpace += size;
           } catch (error) {
-            console.warn(`Failed to analyze orphaned data ${key}:`, error);
           }
         }
       }
     } catch (error) {
-      console.warn('Failed to analyze orphaned data:', error);
     }
 
     // Analyze value info duplicates
@@ -1426,7 +1375,6 @@ export const analyzeStorage = async (): Promise<{
         }
       }
     } catch (error) {
-      console.warn('Failed to analyze value info duplicates:', error);
     }
 
     return result;
@@ -1474,7 +1422,6 @@ export const cleanupSelectedItems = async (options: {
                 localStorage.removeItem(storageKey);
               }
             } catch (error) {
-              console.warn(`Failed to delete CSV file ${fileId}:`, error);
             }
           }
         }
@@ -1505,17 +1452,18 @@ export const cleanupSelectedItems = async (options: {
           });
           removedOrphans++;
         } catch (error) {
-          console.warn(`Failed to delete orphaned data ${key}:`, error);
         }
       }
     }
 
     // Remove value info duplicates
     if (options.removeValueInfoDuplicates) {
-      const { removeDuplicateValueInfos } = await import('./chatApi');
-      removeDuplicateValueInfos();
-      // Count how many were removed (this is approximate)
-      removedValueInfos = 1; // Flag that cleanup was done
+      const chatApiModule = await import('./chatApi') as any;
+      if (chatApiModule.removeDuplicateValueInfos) {
+        chatApiModule.removeDuplicateValueInfos();
+        // Count how many were removed (this is approximate)
+        removedValueInfos = 1; // Flag that cleanup was done
+      }
     }
 
     // Clear cache
@@ -1564,7 +1512,6 @@ export const migrateAllToIndexedDB = async (): Promise<{
           if (localData) {
             await saveCsvDataText(file.id, localData);
             migrated++;
-            console.log(`Migrated ${file.name} to IndexedDB`);
           }
         }
       } catch (error) {

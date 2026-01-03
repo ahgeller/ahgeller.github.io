@@ -1,5 +1,5 @@
 import { useState, useEffect, useRef } from "react";
-import { Plus, MessageSquare, Trash2, Menu, X, Settings, LogOut } from "lucide-react";
+import { Plus, MessageSquare, Trash2, Menu, X, Settings, LogOut, Database } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Chat } from "@/types/chat";
@@ -18,7 +18,6 @@ interface ChatSidebarProps {
   isOpen: boolean;
   onToggle: () => void;
   onSettings: () => void;
-  onDatabaseSettings?: () => void;
   userInfo?: string;
   onLogout?: () => void;
 }
@@ -33,7 +32,6 @@ const ChatSidebar = ({
   isOpen,
   onToggle,
   onSettings,
-  onDatabaseSettings,
   userInfo,
   onLogout,
 }: ChatSidebarProps) => {
@@ -95,13 +93,13 @@ const ChatSidebar = ({
         {isOpen && (
           <>
             {/* Header */}
-            <div className="p-3 border-b border-border/50">
-              <div className="flex items-center justify-between mb-3">
-                <h2 className="text-sm font-semibold text-foreground">Github: ahgeller</h2>
+            <div className="p-4 border-b border-border/30">
+              <div className="flex items-center justify-between mb-4">
+                <h2 className="text-lg font-bold text-foreground tracking-tight">Chats</h2>
                 <Button
                   variant="ghost"
                   size="icon"
-                  className="h-8 w-8"
+                  className="h-8 w-8 hover:bg-chat-hover"
                   onClick={onToggle}
                   title="Close sidebar"
                 >
@@ -110,7 +108,7 @@ const ChatSidebar = ({
               </div>
               <Button
                 onClick={onNewChat}
-                className="w-full bg-primary hover:bg-primary/90 text-primary-foreground transition-colors"
+                className="w-full bg-primary hover:bg-primary/80 text-primary-foreground transition-all shadow-sm hover:shadow-md rounded-lg"
                 size="sm"
               >
                 <Plus className="h-4 w-4 mr-2" />
@@ -119,25 +117,27 @@ const ChatSidebar = ({
             </div>
 
             {/* Chat List */}
-            <div className="flex-1 overflow-y-auto p-2">
+            <div className="flex-1 overflow-y-auto p-3">
               {chats.length === 0 ? (
-                <div className="text-center text-muted-foreground text-sm py-8">
-                  <MessageSquare className="h-8 w-8 mx-auto mb-2 opacity-50" />
-                  <p>No chats yet</p>
+                <div className="text-center text-muted-foreground text-sm py-12">
+                  <MessageSquare className="h-10 w-10 mx-auto mb-3 opacity-40" />
+                  <p className="text-sm">No chats yet</p>
+                  <p className="text-xs mt-1 opacity-60">Start a new conversation</p>
                 </div>
               ) : (
-                <div className="space-y-1">
+                <div className="space-y-2">
                   {chats.map((chat) => (
                     <div
                       key={chat.id}
                       className={cn(
-                        "group relative rounded-lg p-3 cursor-pointer transition-all hover:bg-chat-hover",
-                        activeChat === chat.id && "bg-chat-hover"
+                        "group relative rounded-lg p-3 cursor-pointer transition-all duration-200",
+                        "hover:bg-chat-hover border border-transparent hover:border-border/20",
+                        activeChat === chat.id && "bg-chat-hover border-border/30 shadow-sm"
                       )}
                       onClick={() => onSelectChat(chat.id)}
                     >
-                      <div className="flex items-start gap-2">
-                        <MessageSquare className="h-4 w-4 mt-0.5 flex-shrink-0 text-muted-foreground" />
+                      <div className="flex items-start gap-3">
+                        <MessageSquare className="h-4 w-4 mt-1 flex-shrink-0 text-primary/70" />
                         <div className="flex-1 min-w-0">
                           {editingChatId === chat.id ? (
                             <Input
@@ -157,22 +157,37 @@ const ChatSidebar = ({
                             {chat.title}
                           </p>
                           )}
-                          <div className="flex items-center gap-2">
-                            <p className="text-xs text-muted-foreground">
-                              {formatDateOnly(chat.createdAt)}
-                            </p>
-                            {chat.model && (() => {
-                              const model = AVAILABLE_MODELS.find(m => m.id === chat.model);
-                              const modelName = model ? model.name : (chat.model === "gpt-image-1" ? "Image" : chat.model);
-                              return (
-                                <>
-                                  <span className="text-xs text-muted-foreground/50">•</span>
-                                  <p className="text-xs text-muted-foreground truncate">
-                                    {modelName}
-                                  </p>
-                                </>
-                              );
-                            })()}
+                          <div className="flex flex-col gap-0.5">
+                            <div className="flex items-center gap-2">
+                              <p className="text-xs text-muted-foreground">
+                                {formatDateOnly(chat.createdAt)}
+                              </p>
+                              {chat.model && (() => {
+                                const model = AVAILABLE_MODELS.find(m => m.id === chat.model);
+                                const modelName = model ? model.name : (chat.model === "gpt-image-1" ? "Image" : chat.model);
+                                return (
+                                  <>
+                                    <span className="text-xs text-muted-foreground/50">•</span>
+                                    <p className="text-xs text-muted-foreground truncate">
+                                      {modelName}
+                                    </p>
+                                  </>
+                                );
+                              })()}
+                            </div>
+                            {/* Show data source (CSV or database) */}
+                            {(chat.selectedCsvFileNames && chat.selectedCsvFileNames.length > 0) && (
+                              <p className="text-xs text-primary/60 truncate">
+                                📄 {chat.selectedCsvFileNames.length > 1
+                                  ? `${chat.selectedCsvFileNames.length} files`
+                                  : chat.selectedCsvFileNames[0]}
+                              </p>
+                            )}
+                            {chat.selectedMatch && (
+                              <p className="text-xs text-primary/60 truncate">
+                                🏐 Database
+                              </p>
+                            )}
                           </div>
                         </div>
                         <Button
@@ -196,38 +211,24 @@ const ChatSidebar = ({
             </div>
 
             {/* Footer */}
-            <div className="p-3 border-t border-border/50 space-y-2">
+            <div className="p-4 border-t border-border/30 space-y-3 bg-chat-sidebar/50">
               {userInfo && (
-                <div className="text-xs text-muted-foreground mb-2">
+                <div className="text-xs text-muted-foreground mb-2 px-1">
                   {userInfo}
                 </div>
               )}
-              <div className="flex gap-2">
-                <Button
-                  variant="ghost"
-                  size="sm"
-                  className="flex-1 text-xs"
-                  onClick={onSettings}
-                  title="API Keys & Settings"
-                >
-                  <Settings className="h-3 w-3 mr-1" />
-                  API Keys
-                </Button>
-                {onDatabaseSettings && (
-                <Button
-                  variant="ghost"
-                  size="sm"
-                  className="flex-1 text-xs"
-                    onClick={onDatabaseSettings}
-                    title="Database Settings"
-                >
-                  <Settings className="h-3 w-3 mr-1" />
-                    DB Settings
-                </Button>
-                )}
-              </div>
-              <p className="text-xs text-muted-foreground text-center">
-                Ai Analytics
+              <Button
+                variant="ghost"
+                size="sm"
+                className="w-full justify-start text-xs hover:bg-chat-hover rounded-lg"
+                onClick={onSettings}
+                title="Settings"
+              >
+                <Settings className="h-3.5 w-3.5 mr-2" />
+                Settings
+              </Button>
+              <p className="text-xs text-muted-foreground/60 text-center pt-2">
+                AI Analytics Platform
               </p>
             </div>
           </>

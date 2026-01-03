@@ -495,17 +495,17 @@ const MultiSelectGroupBy = ({
 
       {/* Selected columns with mode toggles - compact scrollable layout */}
       {selectedColumns.length > 0 && (
-        <div className="mt-2 max-h-20 overflow-y-auto">
-          <div className="flex flex-wrap gap-1.5">
+        <div className="mt-1.5 max-h-20 overflow-y-auto">
+          <div className="flex flex-wrap gap-1">
             {selectedColumns.map((colValue) => {
               const col = availableColumns.find(c => c.value === colValue);
               const colLabel = col ? col.label : colValue;
               const mode = columnModes?.[colValue] || 'group';
-              
+
               return (
                 <div
                   key={colValue}
-                  className="flex items-center gap-0.5 px-1.5 py-0.5 bg-secondary border border-border rounded text-xs flex-shrink-0"
+                  className="flex items-center gap-0.5 px-1 py-0.5 bg-secondary border border-border rounded text-xs flex-shrink-0"
                 >
                   <span className="text-muted-foreground truncate max-w-[120px]">{colLabel}</span>
                   {onColumnModeChange && (
@@ -556,7 +556,7 @@ const MultiSelectGroupBy = ({
             return (
               <div
                 key={col.value}
-                className={`flex items-center px-3 py-2 cursor-pointer hover:bg-accent ${
+                className={`flex items-center px-2 py-1.5 cursor-pointer hover:bg-accent ${
                   isSelected ? 'bg-accent' : ''
                 }`}
                 onClick={(e) => {
@@ -673,13 +673,13 @@ const MultiSelectGroupBy = ({
                   const buttonText = allSelected 
                     ? `Deselect All (${filteredValues.length.toLocaleString()})`
                     : `Select All (${(filteredValues.length - selectedCount).toLocaleString()} remaining)`;
-                  
+
                   return (
-                  <div className="border-b border-border p-2">
+                  <div className="border-b border-border p-1.5">
                     <Button
                       variant="outline"
                       size="sm"
-                      className="w-full h-8 text-xs"
+                      className="w-full h-7 text-xs"
                       onClick={(e) => {
                         e.stopPropagation();
                         e.preventDefault();
@@ -782,9 +782,9 @@ const MultiSelectGroupBy = ({
                     return (
                       <div
                         key={idx}
-                        className={`p-3 cursor-pointer transition-colors flex items-start gap-2 ${
-                          isSelected 
-                            ? 'bg-primary/30 border-l-4 border-primary font-medium' 
+                        className={`p-2 cursor-pointer transition-colors flex items-start gap-2 ${
+                          isSelected
+                            ? 'bg-primary/30 border-l-4 border-primary font-medium'
                             : 'hover:bg-chat-hover'
                         }`}
                         onClick={(e) => handleValueSelect(value, e)}
@@ -809,9 +809,9 @@ const MultiSelectGroupBy = ({
                     );
                   })}
                 </div>
-                
+
                 {/* Show info about results */}
-                <div className="border-t border-border p-2 flex items-center justify-between text-xs text-muted-foreground">
+                <div className="border-t border-border p-1.5 flex items-center justify-between text-xs text-muted-foreground">
                   <span>
                     Showing {startIdx + 1}-{endIdx} of {filteredValues.length}
                     {hasMoreResults && (
@@ -858,7 +858,7 @@ const MultiSelectGroupBy = ({
 
       {/* Selected tags */}
       {selectedColumns.length > 0 && (
-        <div className="mt-2 flex flex-wrap gap-2">
+        <div className="mt-1.5 flex flex-wrap gap-1.5">
           {selectedColumns.map((colValue) => {
             const col = availableColumns.find(c => c.value === colValue);
             if (!col) {
@@ -868,7 +868,7 @@ const MultiSelectGroupBy = ({
                 return (
                   <div
                     key={`tag-${colValue}`}
-                    className="inline-flex items-center gap-1 px-2 py-1 bg-primary/20 border border-primary/30 rounded text-xs"
+                    className="inline-flex items-center gap-1 px-1.5 py-0.5 bg-primary/20 border border-primary/30 rounded text-xs"
                   >
                     <span>{col.label}</span>
                     <Button

@@ -1,5 +1,5 @@
 import { useState, useRef, useEffect } from "react";
-import { Menu, Send, Image as ImageIcon, Brain, X, Target, Eye, Square } from "lucide-react";
+import { Menu, Send, Image as ImageIcon, Brain, X, Target, Eye, Square, Code2 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Textarea } from "@/components/ui/textarea";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
@@ -9,12 +9,12 @@ import { sendChatMessage, DEFAULT_MODEL, getValueInfo } from "@/lib/chatApi";
 import { loadMatchData, isDatabaseConnected } from "@/lib/database";
 import MatchSelector from "./MatchSelector";
 import CSVSelector from "./CSVSelector";
-import WelcomeScreen from "./WelcomeScreen";
 import ModelSelector from "./ModelSelector";
 import { DataPreview } from "./DataPreview";
 import { cn } from "@/lib/utils";
 import { VirtualizedMessages } from "./VirtualizedMessages";
 import { CodeExecutionDialog } from "./CodeExecutionDialog";
+import { CodePlayground } from "./CodePlayground";
 import { CodeBlock } from "@/lib/codeExecutorV2";
 
 interface ChatMainProps {
@@ -39,6 +39,7 @@ interface ChatMainProps {
       csvDisplayColumns?: string[];
       csvDisplayValues?: Record<string, string | null>;
       selectedCsvIds?: string[];
+      selectedCsvFileNames?: string[];
       selectedContextSectionId?: string | null;
     }
   ) => void;
@@ -106,9 +107,11 @@ const ChatMain = ({
   const [selectedImages, setSelectedImages] = useState<string[]>([]);
   const [matchData, setMatchData] = useState<MatchData | null>(null);
   const [selectedCsvIds, setSelectedCsvIds] = useState<string[]>([]);
+  const [selectedCsvFileNames, setSelectedCsvFileNames] = useState<string[]>([]);
   const [isPreviewOpen, setIsPreviewOpen] = useState(false);
   const [previewData, setPreviewData] = useState<{ data: any[]; fileName: string; headers: string[]; csvId?: string; totalRowCount?: number } | null>(null);
   const [isLoadingPreview, setIsLoadingPreview] = useState(false);
+  const [isPlaygroundOpen, setIsPlaygroundOpen] = useState(false);
   const [csvFilterColumns, setCsvFilterColumns] = useState<string[]>([]);
   const [csvFilterValues, setCsvFilterValues] = useState<Record<string, string | string[] | null>>({});
   const [csvDisplayColumns, setCsvDisplayColumns] = useState<string[]>([]);
@@ -268,6 +271,7 @@ const ChatMain = ({
       setCsvDisplayColumns(chat.csvDisplayColumns || []);
       setCsvDisplayValues(chat.csvDisplayValues || {});
       setSelectedCsvIds(chat.selectedCsvIds || []);
+      setSelectedCsvFileNames(chat.selectedCsvFileNames || []);
       setSelectedContextSectionId(chat.selectedContextSectionId !== undefined ? chat.selectedContextSectionId : "none");
     } else {
       // Reset when no chat is selected
@@ -280,6 +284,7 @@ const ChatMain = ({
       setCsvDisplayColumns([]);
       setCsvDisplayValues({});
       setSelectedCsvIds([]);
+      setSelectedCsvFileNames([]);
       setSelectedContextSectionId("none");
     }
   }, [chat?.id]);
@@ -442,7 +447,7 @@ const ChatMain = ({
   
   // Check if user has made filter selections (even if Value Info hasn't been created yet)
   const hasFilterSelections = (matchFilterColumns.length > 0 && Object.keys(matchFilterValues).some(col => hasValue(matchFilterValues[col]))) ||
-                              (csvFilterColumns.length > 0 && Object.keys(csvFilterValues).some(col => hasValue(csvFilterValues[col])));
+                              (selectedCsvIds.length > 0 && csvFilterColumns.length > 0 && Object.keys(csvFilterValues).some(col => hasValue(csvFilterValues[col])));
   
   // Enable volleyball context if match data is loaded OR if grouped data is selected
   // IMPORTANT: hasCurrentSelection already verifies the Value Info belongs to the current chat
@@ -770,6 +775,65 @@ const ChatMain = ({
               // Not valid JSON, ignore
             }
           }
+
+          // Extract executionStatus from content (which code blocks succeeded/failed)
+          // ONLY include blocks that have ACTUALLY been executed (have results or errors)
+          let executionStatusData: Array<{index: number, success: boolean, error?: string}> | undefined;
+          const codeBlocks = Array.from(assistantContent.matchAll(/```execute\s*\n([\s\S]*?)```/gi));
+          if (codeBlocks.length > 0) {
+            const resultMatches = Array.from(assistantContent.matchAll(/(?:\*\*)?Code Execution Result(?:\*\*)?/gi));
+            // Don't allow ``` in the captured content to prevent matching into next code block
+            const errorMatches = Array.from(assistantContent.matchAll(/(?:\*\*)?Code Execution Error(?:\*\*)?(?:\s*\([^)]+\))?\s*:?\s*\n?\s*```\s*\n?([^`]*(?:`[^`][^`]*)*?)\n```/gi));
+
+            // Only include blocks that have results or errors (i.e., have been executed)
+            const executedBlocks: Array<{index: number, success: boolean, error?: string}> = [];
+
+            // Results/errors appear AFTER all code blocks, so match by order not position
+            const lastCodeBlockEnd = codeBlocks.length > 0
+              ? (codeBlocks[codeBlocks.length - 1].index || 0) + (codeBlocks[codeBlocks.length - 1][0]?.length || 0)
+              : 0;
+
+            // Filter to only results/errors that appear after all code blocks
+            const resultsAfterCode = resultMatches.filter(rm => (rm.index || 0) > lastCodeBlockEnd);
+            const errorsAfterCode = errorMatches.filter(em => (em.index || 0) > lastCodeBlockEnd);
+
+            codeBlocks.forEach((_, index) => {
+              // Match by ORDER: Nth error/result corresponds to Nth code block
+              // But only from results/errors that appear after all blocks
+              const errorMatch = errorsAfterCode[index];
+              const resultMatch = resultsAfterCode[index];
+
+              if (errorMatch) {
+                const errorText = errorMatch[1] || '';
+                // Check if it's a skipped error (orange)
+                if (errorText.trim().startsWith('Skipped:')) {
+                  executedBlocks.push({
+                    index,
+                    success: false,
+                    error: errorText.trim()
+                  });
+                } else {
+                  executedBlocks.push({
+                    index,
+                    success: false,
+                    error: errorText.trim()
+                  });
+                  console.log('🔴 ChatMain: Block', index, 'error:', errorText.trim().substring(0, 50));
+                }
+              } else if (resultMatch) {
+                executedBlocks.push({
+                  index,
+                  success: true
+                });
+              }
+              // If no result/error, don't include this block (hasn't been executed yet)
+            });
+
+            // Only set executionStatusData if we found executed blocks
+            if (executedBlocks.length > 0) {
+              executionStatusData = executedBlocks;
+            }
+          }
           
           // Also try to find any JSON blocks that look like execution results
           if (!executionResultsData) {
@@ -805,9 +869,10 @@ const ChatMain = ({
             content: assistantContent,
             timestamp: initialAssistantMessage.timestamp,
             model: currentModel,
-            executionResults: executionResultsData || undefined
+            executionResults: executionResultsData || undefined,
+            executionStatus: executionStatusData
           };
-          
+
           // Update message in real-time
           onUpdateMessages(chat.id, (prevMessages) => {
             // Use the base messages (user + previous messages) and update/append assistant message
@@ -967,7 +1032,19 @@ const ChatMain = ({
               {hasCurrentSelection && currentSelectionValueInfo && currentSelectionValueInfo.name ? (
                 <>
                   <span className="text-muted-foreground">Active Dataset:</span>
-                  <span className="text-foreground">{currentSelectionValueInfo.name}</span>
+                  <span className="text-foreground">
+                    {currentSelectionValueInfo.name}
+                    {selectedCsvFileNames.length > 0 && (
+                      <span>
+                        {' | CSV: '}
+                        {selectedCsvFileNames.length === 1
+                          ? selectedCsvFileNames[0]
+                          : selectedCsvFileNames.length === 2
+                            ? selectedCsvFileNames.join(', ')
+                            : `${selectedCsvFileNames.slice(0, 2).join(', ')}... (${selectedCsvFileNames.length} total)`}
+                      </span>
+                    )}
+                  </span>
                   {(currentSelectionValueInfo.data && Array.isArray(currentSelectionValueInfo.data)) || currentSelectionValueInfo.rowCount ? (
                     <span className="text-muted-foreground">
                       <span className="ml-1">|</span>
@@ -1014,29 +1091,11 @@ const ChatMain = ({
                       </>
                     );
                   }
-                } else if (hasCsvSelections) {
-                  // Show CSV filter selections with CSV filename
+                } else if (hasCsvSelections && selectedCsvIds.length > 0) {
+                  // Show CSV filter selections with CSV filename (only if files are selected)
                   const groupCols = csvFilterColumns.filter(col => hasValue(csvFilterValues[col]));
 
                   if (groupCols.length > 0) {
-                    // Get CSV filename(s)
-                    let csvFileNames: string[] = [];
-                    try {
-                      const saved = localStorage.getItem("db_csv_files");
-                      if (saved) {
-                        const parsed = JSON.parse(saved);
-                        const files = Array.isArray(parsed) ? parsed : [];
-                        csvFileNames = selectedCsvIds
-                          .map(id => {
-                            const file = files.find((f: any) => f.id === id);
-                            return file ? file.name : null;
-                          })
-                          .filter((name): name is string => name !== null);
-                      }
-                    } catch (e) {
-                      // Ignore errors
-                    }
-
                     return (
                       <>
                         <span className="text-muted-foreground">Active Dataset:</span>
@@ -1058,16 +1117,14 @@ const ChatMain = ({
                               return `${col}=${value}`;
                             })
                             .join(', ')}
-                          {csvFileNames.length > 0 && (
-                            <span>
-                              {' | CSV: '}
-                              {csvFileNames.length === 1
-                                ? csvFileNames[0]
-                                : csvFileNames.length === 2
-                                  ? csvFileNames.join(', ')
-                                  : `${csvFileNames.slice(0, 2).join(', ')}... (${csvFileNames.length} total)`}
-                            </span>
-                          )}
+                          {' | CSV: '}
+                          {selectedCsvFileNames.length > 0
+                            ? (selectedCsvFileNames.length === 1
+                                ? selectedCsvFileNames[0]
+                                : selectedCsvFileNames.length === 2
+                                  ? selectedCsvFileNames.join(', ')
+                                  : `${selectedCsvFileNames.slice(0, 2).join(', ')}... (${selectedCsvFileNames.length} total)`)
+                            : `${selectedCsvIds.length} file${selectedCsvIds.length > 1 ? 's' : ''}`}
                         </span>
                       </>
                     );
@@ -1231,6 +1288,7 @@ const ChatMain = ({
                         csvDisplayColumns: newColumns.length > 0 && Object.keys(filteredNewValues).some(col => filteredNewValues[col] != null) ? [] : csvDisplayColumns,
                         csvDisplayValues: newColumns.length > 0 && Object.keys(filteredNewValues).some(col => filteredNewValues[col] != null) ? {} : csvDisplayValues,
                         selectedCsvIds: selectedCsvIds, // Keep CSV files selected even when SQL has grouped selection
+                        selectedCsvFileNames: selectedCsvFileNames,
                         selectedContextSectionId,
                       });
                     }
@@ -1248,22 +1306,24 @@ const ChatMain = ({
                       chatId={chat.id}
                       showGroupBy={false}
                       disabled={matchFilterColumns.length > 0 && Object.keys(matchFilterValues).some(col => matchFilterValues[col] != null) || isLoading || (!!csvLoadingProgress && !(csvLoadingProgress as any).error)}
-                      onSelectCsv={(csvIds, filterColumns, filterValues, displayColumns, displayValues) => {
+                      onSelectCsv={(csvIds, filterColumns, filterValues, displayColumns, displayValues, fileNames) => {
                       const newCsvIds = csvIds || [];
                       const newColumns = filterColumns || [];
                       const newValues = filterValues || {};
+                      const newFileNames = fileNames || [];
                       // Preserve existing display columns/values if not provided
                       const newDisplayColumns = displayColumns !== undefined ? displayColumns : csvDisplayColumns;
                       const newDisplayValues = displayValues !== undefined ? displayValues : csvDisplayValues;
-                      
+
                       const filteredNewValues: Record<string, string | string[] | null> = {};
                       newColumns.forEach(col => {
                         if (newValues[col] != null) {
                           filteredNewValues[col] = newValues[col];
                         }
                       });
-                      
+
                       setSelectedCsvIds(newCsvIds);
+                      setSelectedCsvFileNames(newFileNames);
                       setCsvFilterColumns(newColumns);
                       setCsvFilterValues(filteredNewValues);
                       setCsvDisplayColumns(newDisplayColumns);
@@ -1291,6 +1351,7 @@ const ChatMain = ({
                           csvDisplayColumns: newDisplayColumns,
                           csvDisplayValues: newDisplayValues,
                           selectedCsvIds: newCsvIds,
+                          selectedCsvFileNames: fileNames || [],
                           selectedContextSectionId,
                         });
                       }
@@ -1323,24 +1384,336 @@ const ChatMain = ({
         )}
       </div>
       
-      {/* Messages */}
-      <div className="flex-1 overflow-y-auto" ref={messagesContainerRef}>
-        {showWelcome ? (
-          <WelcomeScreen />
-        ) : (
-          <VirtualizedMessages
-            messages={chat.messages}
-            parentRef={messagesContainerRef}
-            isLoading={isLoading}
-            csvLoadingProgress={csvLoadingProgress}
-            sidebarOpen={sidebarOpen}
-          />
-        )}
-      </div>
+      {/* Messages and Input Container */}
+      {showWelcome ? (
+        /* Centered input when no messages */
+        <div className="flex-1 flex flex-col items-center justify-center px-4 pb-8">
+          <div className="w-full max-w-5xl space-y-6">
+            <div className="text-center mb-6">
+              <h1 className="text-2xl md:text-3xl font-bold bg-gradient-to-r from-primary via-primary/80 to-primary/60 bg-clip-text text-transparent mb-2 pb-1 leading-relaxed">
+                What can I help you analyze?
+              </h1>
+              <p className="text-sm text-muted-foreground">
+                Upload data or connect a database to get started
+              </p>
+            </div>
 
-      {/* Input */}
-      <div className="border-t border-border/50 md:p-4 md:pb-4 p-2 pb-1 bg-background">
-        <div className="max-w-6xl mx-auto">
+            {/* Centered Input */}
+            <div className="w-full">
+              {selectedImages.length > 0 && (
+                <div className="mb-2 flex gap-2">
+                  {selectedImages.map((img, idx) => (
+                    <div key={idx} className="relative">
+                      <img
+                        src={img}
+                        alt="Preview"
+                        className="w-20 h-20 object-cover rounded-lg border border-border"
+                      />
+                      <Button
+                        variant="ghost"
+                        size="icon"
+                        className="absolute -top-2 -right-2 h-6 w-6 bg-destructive text-destructive-foreground hover:bg-destructive/90"
+                        onClick={removeImage}
+                      >
+                        <X className="h-3 w-3" />
+                      </Button>
+                    </div>
+                  ))}
+                </div>
+              )}
+              <div className="flex gap-2 items-end">
+                <input
+                  ref={fileInputRef}
+                  type="file"
+                  accept="image/*"
+                  onChange={handleImageSelect}
+                  className="hidden"
+                />
+                <Button
+                  variant="ghost"
+                  size="icon"
+                  onClick={() => fileInputRef.current?.click()}
+                  className="md:h-[60px] md:w-[60px] h-[50px] w-[50px] flex-shrink-0"
+                  title="Attach image"
+                >
+                  <ImageIcon className="h-5 w-5" />
+                </Button>
+                <Button
+                  variant="ghost"
+                  size="icon"
+                  onClick={() => setIsPlaygroundOpen(true)}
+                  className="md:h-[60px] md:w-[60px] h-[50px] w-[50px] flex-shrink-0"
+                  title="Code Playground"
+                >
+                  <Code2 className="h-5 w-5" />
+                </Button>
+                <div className="relative flex-1">
+                  <Textarea
+                    ref={textareaRef}
+                    value={input}
+                    onChange={(e) => setInput(e.target.value)}
+                    onKeyDown={handleKeyDown}
+                    onPaste={handlePaste}
+                    placeholder={typeof window !== 'undefined' && window.innerWidth < 768 ? "Ask about your data..." : "Ask about your data... (Paste images with Ctrl+V)"}
+                    className={cn(
+                      "md:min-h-[60px] min-h-[50px] max-h-[200px] resize-none bg-secondary border-border/50 focus:border-primary",
+                      ((supportsReasoning && onUpdateReasoning) || onUpdateVolleyballContext) ? "pr-48" : "pr-2"
+                    )}
+                    disabled={isLoading || (!!csvLoadingProgress && !(csvLoadingProgress as any).error && csvLoadingProgress.percent < 100)}
+                  />
+                  <div className="absolute right-2 bottom-2 flex gap-1">
+                    {/* Data Preview Button - only show when CSV is selected */}
+                    {selectedCsvIds.length > 0 && (
+                      <Button
+                        type="button"
+                        variant="outline"
+                        size="sm"
+                        disabled={isLoadingPreview}
+                        onClick={async () => {
+                          if (isLoadingPreview) return;
+
+                          setIsLoadingPreview(true);
+                          try {
+                            const { getCsvDataRows, getAllCsvFileMetadata } = await import('@/lib/csvStorage');
+                            const allFiles = await getAllCsvFileMetadata();
+                            const selectedFile = allFiles.find(f => f.id === selectedCsvIds[0]);
+
+                            if (!selectedFile) {
+                              throw new Error('Selected file not found. Please re-select the CSV file.');
+                            }
+
+                            let data: any[] = [];
+                            const totalRows = selectedFile.rowCount || 0;
+
+                            try {
+                              // Try to get filtered data if filters are applied
+                              const filterCols = [...csvFilterColumns, ...csvDisplayColumns];
+                              const hasFilters = filterCols.length > 0 && Object.keys(csvFilterValues).some(col => csvFilterValues[col] != null);
+
+                              if (hasFilters) {
+                                const { queryCSVWithDuckDB } = await import('@/lib/duckdb');
+                                // Load filtered data (limited) - search can find more
+                                const fullData = await queryCSVWithDuckDB(selectedCsvIds[0], filterCols, csvFilterValues);
+                                data = fullData?.slice(0, 500) || [];
+                              } else {
+                                // FAST: Query directly from OPFS Parquet - skips IndexedDB loading
+                                const { queryParquetDirect, isDuckDBInitialized } = await import('@/lib/duckdb');
+                                if (isDuckDBInitialized()) {
+                                  try {
+                                    data = await queryParquetDirect(selectedCsvIds[0], 500) || [];
+                                  } catch (parquetError) {
+                                    console.warn('Fast Parquet query failed, falling back to IndexedDB:', parquetError);
+                                    try {
+                                      data = await getCsvDataRows(selectedFile, undefined, true);
+                                      data = data.slice(0, 500);
+                                    } catch (indexedDbError) {
+                                      console.error('IndexedDB fallback also failed:', indexedDbError);
+                                      throw new Error('Failed to load data from both Parquet and IndexedDB');
+                                    }
+                                  }
+                                } else {
+                                  data = await getCsvDataRows(selectedFile, undefined, true);
+                                  data = data.slice(0, 500);
+                                }
+                              }
+                            } catch (error) {
+                              console.error('Preview: Data load failed:', error);
+                              try {
+                                data = await getCsvDataRows(selectedFile, undefined, true);
+                                data = data.slice(0, 500);
+                              } catch (fallbackError) {
+                                console.error('Preview: Fallback also failed:', fallbackError);
+                                throw new Error('Unable to load data. The file may need to be re-uploaded.');
+                              }
+                            }
+
+                            // Validate we have data
+                            if (!data || !Array.isArray(data)) {
+                              throw new Error('Failed to load data from file');
+                            }
+
+                            // Get headers - from file metadata or from first row
+                            let headers = selectedFile.headers || [];
+                            if (headers.length === 0 && data.length > 0) {
+                              headers = Object.keys(data[0]);
+                            }
+
+                            setPreviewData({
+                              data: data,
+                              fileName: selectedFile.name || 'Unknown',
+                              headers: headers,
+                              csvId: selectedCsvIds[0], // For loading more data
+                              totalRowCount: totalRows > data.length ? totalRows : undefined
+                            });
+                            setIsPreviewOpen(true);
+                          } catch (error: any) {
+                            console.error('Preview failed:', error);
+                            toast({
+                              title: "Preview Error",
+                              description: error?.message || "Failed to load dataset preview",
+                              variant: "destructive"
+                            });
+                          } finally {
+                            setIsLoadingPreview(false);
+                          }
+                        }}
+                        className="h-8 px-2 text-xs flex items-center gap-1"
+                        title="Preview dataset"
+                      >
+                        {isLoadingPreview ? (
+                          <span className="h-3 w-3 border-2 border-current border-t-transparent rounded-full animate-spin" />
+                        ) : (
+                          <Eye className="h-3 w-3" />
+                        )}
+                      </Button>
+                    )}
+                    {onUpdateVolleyballContext && (
+                      <Button
+                        type="button"
+                        variant={volleyballContextEnabled ? "default" : "outline"}
+                        size="sm"
+                        onClick={handleToggleVolleyballContext}
+                        disabled={!matchData && !hasCurrentSelection && !hasFilterSelections}
+                        className={cn(
+                          "h-8 px-2 text-xs flex items-center gap-1",
+                          volleyballContextEnabled && "bg-primary text-primary-foreground",
+                          !matchData && !hasCurrentSelection && !hasFilterSelections && "opacity-50 cursor-not-allowed"
+                        )}
+                        title={!matchData && !hasCurrentSelection && !hasFilterSelections ? "Select data first to enable volleyball context" : (volleyballContextEnabled ? "Volleyball context enabled" : "Volleyball context disabled - use as regular AI")}
+                      >
+                        <Target className="h-3 w-3" />
+                        VB
+                      </Button>
+                    )}
+                    {supportsReasoning && onUpdateReasoning && (
+                      <Button
+                        type="button"
+                        variant={reasoningEnabled ? "default" : "outline"}
+                        size="sm"
+                        onClick={handleToggleReasoning}
+                        className={cn(
+                          "h-8 px-2 text-xs flex items-center gap-1",
+                          reasoningEnabled && "bg-primary text-primary-foreground"
+                        )}
+                        title="Enable step-by-step reasoning (shows model's thinking process)"
+                      >
+                        <Brain className="h-3 w-3" />
+                        Reasoning
+                      </Button>
+                    )}
+                  </div>
+                </div>
+                {isLoading ? (
+                  <Button
+                    onClick={handleStop}
+                    className="md:h-[60px] md:w-[60px] h-[50px] w-[50px] bg-red-600 hover:bg-red-700 text-white"
+                    title="Stop AI response"
+                  >
+                    <Square className="h-5 w-5" />
+                  </Button>
+                ) : (
+                  <Button
+                    data-send-button
+                    onClick={handleSend}
+                    disabled={(!input.trim() && selectedImages.length === 0) || isLoading || (!!csvLoadingProgress && !(csvLoadingProgress as any).error)}
+                    className="md:h-[60px] md:w-[60px] h-[50px] w-[50px] bg-primary hover:bg-primary/90 text-primary-foreground"
+                  >
+                    <Send className="h-5 w-5" />
+                  </Button>
+                )}
+              </div>
+              <div className="flex items-center justify-between md:mt-2 mt-0.5 md:mb-0 mb-0 px-2 md:flex-row flex-col gap-1">
+                <p className="text-xs text-muted-foreground md:block hidden">
+                  Press Enter to send, Shift+Enter for new line
+                </p>
+                <div className="flex items-center gap-4 md:ml-0 ml-auto">
+                  {/* Context Section Selector */}
+                  <div className="flex items-center gap-2">
+                    <label className="text-xs text-muted-foreground md:inline hidden">Context:</label>
+                    <Select
+                      value={selectedContextSectionId === null || selectedContextSectionId === undefined ? "none" : selectedContextSectionId}
+                      onValueChange={(value: string) => {
+                        const newId = value === "all" ? null : value;
+                        setSelectedContextSectionId(newId);
+                        if (onUpdateFilters && chat) {
+                          onUpdateFilters(chat.id, {
+                            matchFilterColumns,
+                            matchFilterValues,
+                            matchDisplayColumns,
+                            matchDisplayValues,
+                            csvFilterColumns,
+                            csvFilterValues,
+                            csvDisplayColumns,
+                            csvDisplayValues,
+                            selectedCsvIds,
+                            selectedCsvFileNames,
+                            selectedContextSectionId: newId,
+                          });
+                        }
+                      }}
+                      disabled={contextSections.length === 0}
+                    >
+                      <SelectTrigger className="h-7 w-28 text-xs">
+                        <SelectValue placeholder={contextSections.length === 0 ? "No context" : "Select"} />
+                      </SelectTrigger>
+                      <SelectContent>
+                        <SelectItem value="all">All Sections</SelectItem>
+                        <SelectItem value="none">None</SelectItem>
+                        {contextSections.map((section) => (
+                          <SelectItem key={section.id} value={section.id}>
+                            {section.title || `Section ${section.id}`}
+                          </SelectItem>
+                        ))}
+                      </SelectContent>
+                    </Select>
+                  </div>
+
+                  {/* Max Followups */}
+                  <div className="flex items-center gap-2">
+                    <label className="text-xs text-muted-foreground md:inline hidden">Max Followups:</label>
+                    <Select
+                      value={maxFollowupDepth.toString()}
+                      onValueChange={(value) => {
+                        const depth = parseInt(value, 10);
+                        if (chat && onUpdateMaxFollowupDepth) {
+                          onUpdateMaxFollowupDepth(chat.id, depth);
+                        }
+                      }}
+                    >
+                      <SelectTrigger className="h-7 w-20 text-xs">
+                        <SelectValue />
+                      </SelectTrigger>
+                      <SelectContent>
+                        <SelectItem value="0">Unlimited</SelectItem>
+                        <SelectItem value="1">1</SelectItem>
+                        <SelectItem value="2">2</SelectItem>
+                        <SelectItem value="3">3</SelectItem>
+                        <SelectItem value="4">4</SelectItem>
+                        <SelectItem value="5">5</SelectItem>
+                      </SelectContent>
+                    </Select>
+                  </div>
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
+      ) : (
+        <>
+          {/* Messages */}
+          <div className="flex-1 overflow-y-auto" ref={messagesContainerRef}>
+            <VirtualizedMessages
+              messages={chat.messages}
+              parentRef={messagesContainerRef}
+              isLoading={isLoading}
+              csvLoadingProgress={csvLoadingProgress}
+              sidebarOpen={sidebarOpen}
+            />
+          </div>
+
+          {/* Input at bottom when messages exist */}
+          <div className="md:p-4 md:pb-4 p-2 pb-1">
+            <div className="max-w-6xl mx-auto">
           {selectedImages.length > 0 && (
             <div className="mb-2 flex gap-2">
               {selectedImages.map((img, idx) => (
@@ -1362,56 +1735,6 @@ const ChatMain = ({
               ))}
             </div>
           )}
-          {/* Context Section Selector - always visible */}
-          <div className="md:mb-3 mb-1.5 flex items-center gap-2 md:flex-row flex-col md:items-center items-stretch">
-            <label className="text-sm text-muted-foreground whitespace-nowrap md:inline hidden">Context Section:</label>
-            <div className="md:w-48 w-full">
-              <Select
-                value={selectedContextSectionId === null || selectedContextSectionId === undefined ? "none" : selectedContextSectionId}
-                onValueChange={(value: string) => {
-                  // "all" = null (combine all sections), "none" = "none" (no sections), otherwise = section id
-                  const newId = value === "all" ? null : value;
-                  setSelectedContextSectionId(newId);
-                  if (onUpdateFilters && chat) {
-                    onUpdateFilters(chat.id, {
-                      matchFilterColumns,
-                      matchFilterValues,
-                      matchDisplayColumns,
-                      matchDisplayValues,
-                      csvFilterColumns,
-                      csvFilterValues,
-                      csvDisplayColumns,
-                      csvDisplayValues,
-                      selectedCsvIds,
-                      selectedContextSectionId: newId,
-                    });
-                  }
-                }}
-                disabled={contextSections.length === 0}
-              >
-                <SelectTrigger className="h-9 bg-secondary">
-                  <SelectValue placeholder={contextSections.length === 0 ? "No context sections" : "Context Section"} />
-                </SelectTrigger>
-                <SelectContent>
-                  {contextSections.length > 0 ? (
-                    <>
-                      <SelectItem value="all">All Sections</SelectItem>
-                      <SelectItem value="none">None</SelectItem>
-                      {contextSections.map((section) => (
-                        <SelectItem key={section.id} value={section.id}>
-                          {section.title || `Section ${section.id}`}
-                        </SelectItem>
-                      ))}
-                    </>
-                  ) : (
-                    <SelectItem value="none" disabled>
-                      Configure in Settings
-                    </SelectItem>
-                  )}
-                </SelectContent>
-              </Select>
-            </div>
-          </div>
           <div className="flex gap-2 items-end">
             <input
               ref={fileInputRef}
@@ -1425,8 +1748,18 @@ const ChatMain = ({
               size="icon"
               onClick={() => fileInputRef.current?.click()}
               className="md:h-[60px] md:w-[60px] h-[50px] w-[50px] flex-shrink-0"
+              title="Attach image"
             >
-              <ImageIcon className="h-4 w-4" />
+              <ImageIcon className="h-5 w-5" />
+            </Button>
+            <Button
+              variant="ghost"
+              size="icon"
+              onClick={() => setIsPlaygroundOpen(true)}
+              className="md:h-[60px] md:w-[60px] h-[50px] w-[50px] flex-shrink-0"
+              title="Code Playground"
+            >
+              <Code2 className="h-5 w-5" />
             </Button>
             <div className="relative flex-1">
               <Textarea
@@ -1587,19 +1920,19 @@ const ChatMain = ({
             {isLoading ? (
               <Button
                 onClick={handleStop}
-                className="md:h-[60px] md:px-6 h-[50px] px-4 bg-red-600 hover:bg-red-700 text-white"
+                className="md:h-[60px] md:w-[60px] h-[50px] w-[50px] bg-red-600 hover:bg-red-700 text-white"
                 title="Stop AI response"
               >
-                <Square className="h-4 w-4" />
+                <Square className="h-5 w-5" />
               </Button>
             ) : (
               <Button
                 data-send-button
                 onClick={handleSend}
                 disabled={(!input.trim() && selectedImages.length === 0) || isLoading || (!!csvLoadingProgress && !(csvLoadingProgress as any).error)}
-                className="md:h-[60px] md:px-6 h-[50px] px-4 bg-primary hover:bg-primary/90 text-primary-foreground"
+                className="md:h-[60px] md:w-[60px] h-[50px] w-[50px] bg-primary hover:bg-primary/90 text-primary-foreground"
               >
-                <Send className="h-4 w-4" />
+                <Send className="h-5 w-5" />
               </Button>
             )}
           </div>
@@ -1607,34 +1940,80 @@ const ChatMain = ({
             <p className="text-xs text-muted-foreground md:block hidden">
               Press Enter to send, Shift+Enter for new line
             </p>
-            <div className="flex items-center gap-2 md:ml-0 ml-auto">
-              <label className="text-xs text-muted-foreground md:inline hidden">Max Followups:</label>
-              <Select
-                value={maxFollowupDepth.toString()}
-                onValueChange={(value) => {
-                  const depth = parseInt(value, 10);
-                  if (chat && onUpdateMaxFollowupDepth) {
-                    onUpdateMaxFollowupDepth(chat.id, depth);
-                  }
-                }}
-              >
-                <SelectTrigger className="h-7 w-20 text-xs">
-                  <SelectValue />
-                </SelectTrigger>
-                <SelectContent>
-                  <SelectItem value="0">Unlimited</SelectItem>
-                  <SelectItem value="1">1</SelectItem>
-                  <SelectItem value="2">2</SelectItem>
-                  <SelectItem value="3">3</SelectItem>
-                  <SelectItem value="4">4</SelectItem>
-                  <SelectItem value="5">5</SelectItem>
-                </SelectContent>
-              </Select>
+            <div className="flex items-center gap-4 md:ml-0 ml-auto">
+              {/* Context Section Selector */}
+              <div className="flex items-center gap-2">
+                <label className="text-xs text-muted-foreground md:inline hidden">Context:</label>
+                <Select
+                  value={selectedContextSectionId === null || selectedContextSectionId === undefined ? "none" : selectedContextSectionId}
+                  onValueChange={(value: string) => {
+                    const newId = value === "all" ? null : value;
+                    setSelectedContextSectionId(newId);
+                    if (onUpdateFilters && chat) {
+                      onUpdateFilters(chat.id, {
+                        matchFilterColumns,
+                        matchFilterValues,
+                        matchDisplayColumns,
+                        matchDisplayValues,
+                        csvFilterColumns,
+                        csvFilterValues,
+                        csvDisplayColumns,
+                        csvDisplayValues,
+                        selectedCsvIds,
+                        selectedCsvFileNames,
+                        selectedContextSectionId: newId,
+                      });
+                    }
+                  }}
+                  disabled={contextSections.length === 0}
+                >
+                  <SelectTrigger className="h-7 w-28 text-xs">
+                    <SelectValue placeholder={contextSections.length === 0 ? "No context" : "Select"} />
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="all">All Sections</SelectItem>
+                    <SelectItem value="none">None</SelectItem>
+                    {contextSections.map((section) => (
+                      <SelectItem key={section.id} value={section.id}>
+                        {section.title || `Section ${section.id}`}
+                      </SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+              </div>
+
+              {/* Max Followups */}
+              <div className="flex items-center gap-2">
+                <label className="text-xs text-muted-foreground md:inline hidden">Max Followups:</label>
+                <Select
+                  value={maxFollowupDepth.toString()}
+                  onValueChange={(value) => {
+                    const depth = parseInt(value, 10);
+                    if (chat && onUpdateMaxFollowupDepth) {
+                      onUpdateMaxFollowupDepth(chat.id, depth);
+                    }
+                  }}
+                >
+                  <SelectTrigger className="h-7 w-20 text-xs">
+                    <SelectValue />
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="0">Unlimited</SelectItem>
+                    <SelectItem value="1">1</SelectItem>
+                    <SelectItem value="2">2</SelectItem>
+                    <SelectItem value="3">3</SelectItem>
+                    <SelectItem value="4">4</SelectItem>
+                    <SelectItem value="5">5</SelectItem>
+                  </SelectContent>
+                </Select>
+              </div>
             </div>
           </div>
         </div>
       </div>
-      
+      </>
+      )}
+
       {/* Data Preview Modal */}
       {previewData && isPreviewOpen && (
         <DataPreview
@@ -1660,6 +2039,15 @@ const ChatMain = ({
           onReject={handleCodeRejection}
         />
       )}
+
+      {/* Code Playground */}
+      <CodePlayground
+        isOpen={isPlaygroundOpen}
+        onClose={() => setIsPlaygroundOpen(false)}
+        csvId={selectedCsvIds.length > 0 ? selectedCsvIds : null}
+        csvFilterColumns={csvFilterColumns.length > 0 ? csvFilterColumns : null}
+        csvFilterValues={Object.keys(csvFilterValues).length > 0 ? csvFilterValues : null}
+      />
     </div>
   );
 };

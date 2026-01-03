@@ -13,6 +13,7 @@ import { generatePrefixedId } from "@/lib/idGenerator";
 interface DatabaseSettingsProps {
   isOpen: boolean;
   onClose: () => void;
+  contentOnly?: boolean;
 }
 
 interface ContextSection {
@@ -126,7 +127,7 @@ const ValueInfoItem = ({ valueInfo, onDelete }: { valueInfo: ValueInfo; onDelete
   );
 };
 
-const DatabaseSettings = ({ isOpen, onClose }: DatabaseSettingsProps) => {
+const DatabaseSettings = ({ isOpen, onClose, contentOnly = false }: DatabaseSettingsProps) => {
   const [connectionString, setConnectionString] = useState("");
   const [tableName, setTableName] = useState("");
   const [contextSections, setContextSections] = useState<ContextSection[]>([]);
@@ -743,20 +744,21 @@ VOLLEYBALL DATA UNDERSTANDING:
     }
   };
 
-  if (!isOpen) return null;
+  if (!isOpen && !contentOnly) return null;
 
-  return (
-    <div className="fixed inset-0 bg-black/50 z-50 flex items-center justify-center p-4" onClick={onClose}>
-      <div className="bg-chat-bg rounded-lg shadow-xl w-full max-w-4xl max-h-[90vh] overflow-y-auto" onClick={(e) => e.stopPropagation()}>
-        <div className="p-6">
-          <div className="flex justify-between items-center mb-6">
-            <h2 className="text-2xl font-bold">Database Settings</h2>
-            <Button variant="ghost" size="sm" onClick={onClose}>
-              <X className="h-4 w-4" />
-            </Button>
-          </div>
+  const content = (
+    <>
+      {!contentOnly && (
+        <div className="flex justify-between items-center mb-6">
+          <h2 className="text-2xl font-bold">Database Settings</h2>
+          <Button variant="ghost" size="sm" onClick={onClose}>
+            <X className="h-4 w-4" />
+          </Button>
+        </div>
+      )}
 
-          {/* Database Connection Info */}
+      <div className={contentOnly ? "p-6 overflow-y-auto max-h-full" : ""}>
+        {/* Database Connection Info */}
           <div className="mb-6">
             <label className="block text-sm font-medium mb-2">Database Connection</label>
             <div className="p-4 bg-accent/50 border border-border rounded-lg mb-2">
@@ -1438,9 +1440,24 @@ fs.writeFileSync('import.sql', sql);`}
             </Button>
           </div>
 
-          <div className="flex justify-end gap-2">
-            <Button variant="outline" onClick={onClose}>Close</Button>
-          </div>
+          {!contentOnly && (
+            <div className="flex justify-end gap-2">
+              <Button variant="outline" onClick={onClose}>Close</Button>
+            </div>
+          )}
+        </div>
+    </>
+  );
+
+  if (contentOnly) {
+    return content;
+  }
+
+  return (
+    <div className="fixed inset-0 bg-black/50 z-50 flex items-center justify-center p-4" onClick={onClose}>
+      <div className="bg-chat-bg rounded-lg shadow-xl w-full max-w-4xl max-h-[90vh] overflow-y-auto" onClick={(e) => e.stopPropagation()}>
+        <div className="p-6">
+          {content}
         </div>
       </div>
     </div>

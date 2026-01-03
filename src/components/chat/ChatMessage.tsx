@@ -72,16 +72,20 @@ function EnhancedAIMessage({ message, modelName, sidebarOpen }: { message: Messa
   const parsedContent = useMemo(() => {
     const content = message.content || '';
     const parts: Array<{ type: 'text' | 'code' | 'result' | 'chart' | 'failed' | 'skipped'; content: string; index: number; error?: string; skippedBlocks?: Array<{ content: string; index: number }> }> = [];
-    
+
+    // PRIORITY: Use executionStatus if available (direct from code execution, not regex parsing)
+    const hasExecutionStatus = message.executionStatus && message.executionStatus.length > 0;
+
     // Match ONLY execute code blocks (the ones that get executed and have results)
     const codePattern = /```execute\s*\n([\s\S]*?)```/gi;
     // Match execution results - handle variations: timing info, optional json marker, spacing
     // Pattern matches: **Code Execution Result** (24ms):\n```json\n{...}\n``` or variations
     // Made bold markers (**) optional as a pair to handle cases where markdown is stripped after reload
-    const resultPattern = /(?:\*\*)?Code Execution Result(?:\*\*)?(?:\s*\([^)]+\))?\s*:?\s*\n?\s*```(?:json)?\s*([\s\S]*?)\s*```/gi;
-    // Match execution errors (with or without timing info)
-    // Made bold markers (**) optional as a pair to handle cases where markdown is stripped after reload
-    const errorPattern = /(?:\*\*)?Code Execution Error(?:\*\*)?(?:\s*\([^)]+\))?\s*:?\s*\n?\s*```\s*([\s\S]*?)\s*```|(?:\*\*)?Execution Error:(?:\*\*)?\s*([\s\S]*?)(?:\n{2,}|$)/gi;
+    const resultPattern = /(?:\*\*)?Code Execution Result(?:\*\*)?(?:\s*\([^)]+\))?\s*:?\s*\n?\s*```(?:json)?\s*\n?([\s\S]*?)\n?```/gi;
+    // Match execution errors - same flexible format as results
+    // Use non-greedy match and ensure we don't capture beyond first ``` closing
+    // Don't allow ``` in the captured content to prevent matching into next code block
+    const errorPattern = /(?:\*\*)?Code Execution Error(?:\*\*)?(?:\s*\([^)]+\))?\s*:?\s*\n?\s*```\s*\n?([^`]*(?:`[^`][^`]*)*?)\n```/gi;
     // Match cancelled executions
     const cancelledPattern = /\*\[Code execution cancelled by user\]\*/g;
     
@@ -187,60 +191,83 @@ function EnhancedAIMessage({ message, modelName, sidebarOpen }: { message: Messa
     const codeBlocksWithResults = new Set<number>();
     const codeBlocksWithErrors = new Map<number, string>();
     const codeBlocksSkipped = new Map<number, string>(); // Track skipped blocks (orange)
-    
-    // Mark code blocks with execution results
-    // Helper: find nearest preceding code block index for a given position
-    const findNearestCodeBefore = (pos: number) => {
-      let idx = -1;
-      for (let i = 0; i < codeMatches.length; i++) {
-        if (codeMatches[i].end <= pos) idx = i;
-        else break;
-      }
-      return idx;
-    };
-    // SIMPLE SEQUENTIAL MATCHING: Code blocks execute in order, results appear in same order
-    // Build combined list of all results/errors in the order they appear
-    const allResultsAndErrors = [
-      ...resultMatches.map((r, i) => ({
-        type: 'result' as const,
-        index: i,
-        position: r.start,
-        json: r.json,
-        content: r.content
-      })),
-      ...errorMatches.map((e, i) => ({
-        type: 'error' as const,
-        index: i,
-        position: e.start,
-        error: e.error
-      }))
-    ].sort((a, b) => a.position - b.position);
 
-    // Match each result/error to code blocks sequentially
-    let codeBlockIdx = 0;
-    allResultsAndErrors.forEach((item) => {
-      // Skip if we've run out of code blocks
-      if (codeBlockIdx >= codeMatches.length) return;
-
-      // Mark this code block as having a result
-      codeBlocksWithResults.add(codeBlockIdx);
-
-      if (item.type === 'result') {
-        // Check if result indicates failure (JSON with success: false)
-        if (item.json && item.json.success === false) {
-          codeBlocksWithErrors.set(codeBlockIdx, item.json.error || 'Execution failed');
-        }
-      } else {
-        // Error message
-        if (item.error.startsWith('Skipped:')) {
-          codeBlocksSkipped.set(codeBlockIdx, item.error);
+    // USE executionStatus as PRIMARY source if available (direct from execution, more reliable)
+    if (hasExecutionStatus && message.executionStatus) {
+      message.executionStatus.forEach((status) => {
+        if (status.success) {
+          codeBlocksWithResults.add(status.index);
+        } else if (status.error?.startsWith('Skipped:')) {
+          codeBlocksSkipped.set(status.index, status.error);
         } else {
-          codeBlocksWithErrors.set(codeBlockIdx, item.error);
+          // success: false means it failed, even if error message hasn't arrived yet
+          codeBlocksWithErrors.set(status.index, status.error || 'Execution failed');
         }
-      }
+      });
+    }
+    
+    // FALLBACK: Use regex matching only if executionStatus is NOT available
+    // This handles old messages or cases where executionStatus wasn't stored
+    if (!hasExecutionStatus) {
+      // Helper: find nearest preceding code block index for a given position
+      const findNearestCodeBefore = (pos: number) => {
+        let idx = -1;
+        for (let i = 0; i < codeMatches.length; i++) {
+          if (codeMatches[i].end <= pos) idx = i;
+          else break;
+        }
+        return idx;
+      };
+      // SIMPLE SEQUENTIAL MATCHING: Code blocks execute in order, results appear in same order
+      // Build combined list of all results/errors in the order they appear
+      const allResultsAndErrors = [
+        ...resultMatches.map((r, i) => ({
+          type: 'result' as const,
+          index: i,
+          position: r.start,
+          json: r.json,
+          content: r.content
+        })),
+        ...errorMatches.map((e, i) => ({
+          type: 'error' as const,
+          index: i,
+          position: e.start,
+          error: e.error
+        }))
+      ].sort((a, b) => a.position - b.position);
 
-      codeBlockIdx++;
-    });
+      // Match each result/error to its nearest preceding code block
+      allResultsAndErrors.forEach((item) => {
+        // Find the nearest code block that appears BEFORE this result/error
+        let nearestCodeBlockIdx = -1;
+        for (let i = codeMatches.length - 1; i >= 0; i--) {
+          if (codeMatches[i].end <= item.position) {
+            nearestCodeBlockIdx = i;
+            break;
+          }
+        }
+
+        // Skip if no preceding code block found
+        if (nearestCodeBlockIdx === -1) return;
+
+        // Mark this code block as having a result
+        codeBlocksWithResults.add(nearestCodeBlockIdx);
+
+        if (item.type === 'result') {
+          // Check if result indicates failure (JSON with success: false)
+          if (item.json && item.json.success === false) {
+            codeBlocksWithErrors.set(nearestCodeBlockIdx, item.json.error || 'Execution failed');
+          }
+        } else {
+          // Error message
+          if (item.error.startsWith('Skipped:')) {
+            codeBlocksSkipped.set(nearestCodeBlockIdx, item.error);
+          } else {
+            codeBlocksWithErrors.set(nearestCodeBlockIdx, item.error);
+          }
+        }
+      });
+    }
     
     // Check if execution was cancelled
     const hasCancelled = cancelledMatches.length > 0;
@@ -262,25 +289,29 @@ function EnhancedAIMessage({ message, modelName, sidebarOpen }: { message: Messa
         const hasError = codeBlocksWithErrors.has(match.index);
         const isSkipped = codeBlocksSkipped.has(match.index);
         const hasResult = codeBlocksWithResults.has(match.index);
-        
-        if (hasError) {
-          // Show as failed execution box (RED)
+
+        if (hasError && hasExecutionStatus) {
+          // Show as failed immediately (from executionStatus, don't wait for regex)
+          console.log('🔴 ChatMessage: Adding FAILED part for block', match.index, 'error:', codeBlocksWithErrors.get(match.index));
           parts.push({
             type: 'failed',
             content: match.content,
             index: match.index,
             error: codeBlocksWithErrors.get(match.index) || 'Execution failed'
           });
-          lastIndex = match.end; // Skip this code block in text parsing
+          lastIndex = match.end;
         } else if (isSkipped) {
-          // Show as skipped execution box (ORANGE) - will be grouped later
+          // Show as skipped execution box (ORANGE)
           parts.push({
             type: 'skipped',
             content: match.content,
             index: match.index,
             error: codeBlocksSkipped.get(match.index) || 'Skipped'
           });
-          lastIndex = match.end; // Skip this code block in text parsing
+          lastIndex = match.end;
+        } else if (hasError && !hasExecutionStatus) {
+          // Fallback: Skip code block - error will be shown when regex match is processed
+          lastIndex = match.end;
         } else if (!hasResult) {
           // Only add code blocks that DON'T have results yet (still executing)
           parts.push({
@@ -294,8 +325,46 @@ function EnhancedAIMessage({ message, modelName, sidebarOpen }: { message: Messa
           lastIndex = match.end; // Skip this code block in text parsing
         }
       } else if (match.type === 'error') {
-        // Skip error text - errors are already shown as failed code blocks inline
-        // Don't render errors as separate parts at the end
+        // If using executionStatus, errors are already shown via code blocks
+        // Only process error matches when falling back to regex parsing
+        if (!hasExecutionStatus) {
+          // Add error as failed/skipped part - SAME PATTERN AS RESULTS
+          const errorMatch = errorMatches.find(e => e.start === match.start);
+          if (errorMatch) {
+            // Find corresponding code block
+            let correspondingCodeIdx = -1;
+            for (let i = codeMatches.length - 1; i >= 0; i--) {
+              if (codeMatches[i].end < match.start) {
+                correspondingCodeIdx = i;
+                break;
+              }
+            }
+
+            // Check if this is a "skipped" error (orange) or regular error (red)
+            const isSkippedError = errorMatch.error.startsWith('Skipped:');
+
+            if (isSkippedError) {
+              // Add as skipped part (ORANGE)
+              parts.push({
+                type: 'skipped',
+                content: correspondingCodeIdx >= 0 ? codeMatches[correspondingCodeIdx].content : '',
+                index: correspondingCodeIdx >= 0 ? correspondingCodeIdx : -1,
+                error: errorMatch.error
+              });
+            } else {
+              // Add as failed part (RED)
+              parts.push({
+                type: 'failed',
+                content: correspondingCodeIdx >= 0 ? codeMatches[correspondingCodeIdx].content : '',
+                index: correspondingCodeIdx >= 0 ? correspondingCodeIdx : -1,
+                error: errorMatch.error
+              });
+            }
+          }
+        } else {
+          // Using executionStatus - skip error text from being rendered
+          console.log('⏭️ ChatMessage: Skipping error match at', match.start, '-', match.end);
+        }
         lastIndex = match.end;
       } else if (match.type === 'result') {
         // CRITICAL: Only show results for SUCCESSFUL executions
@@ -363,28 +432,36 @@ function EnhancedAIMessage({ message, modelName, sidebarOpen }: { message: Messa
       });
     }
     
+    // console.log('🔍 ChatMessage: Final parts:', parts.map((p, idx) => ({
+    //   idx,
+    //   type: p.type,
+    //   index: p.index,
+    //   hasError: !!p.error,
+    //   contentPreview: p.content.substring(0, 100)
+    // })));
     return { parts, allCodeBlocks };
-  }, [message.content]);
+  }, [message.content, message.executionStatus]);
   
   const parsedParts = parsedContent.parts;
   const allCodeBlocks = parsedContent.allCodeBlocks;
   
   const hasCode = parsedParts.some(p => p.type === 'code');
   const hasResults = parsedParts.some(p => p.type === 'result');
-  
+  const hasFailed = parsedParts.some(p => p.type === 'failed' || p.type === 'skipped');
+
   // Collect all results for pill display
   const resultParts = parsedParts.filter(p => p.type === 'result');
-  
+
   // State for expanded result in modal
   const [expandedResultIdx, setExpandedResultIdx] = useState<number | null>(null);
-  
+
   // Initialize collapsed results - collapse all execution results by default
   useEffect(() => {
     if (hasResults) {
       const resultIndices = parsedParts
         .map((p, idx) => p.type === 'result' ? idx : -1)
         .filter(idx => idx !== -1);
-      
+
       // Add new result indices to collapsed set (merge, don't replace)
       setCollapsedResults(prev => {
         const newSet = new Set(prev);
@@ -399,7 +476,7 @@ function EnhancedAIMessage({ message, modelName, sidebarOpen }: { message: Messa
       });
     }
   }, [parsedParts.length, hasResults]);
-  
+
   const toggleCode = (index: number) => {
     const newExpanded = new Set(expandedCode);
     if (newExpanded.has(index)) {
@@ -419,11 +496,11 @@ function EnhancedAIMessage({ message, modelName, sidebarOpen }: { message: Messa
     }
     setCollapsedResults(newCollapsed);
   };
-  
-  // If no code/results, use simple layout
-  if (!hasCode && !hasResults) {
+
+  // If no code/results/failed executions, use simple layout
+  if (!hasCode && !hasResults && !hasFailed) {
     return (
-      <div className="rounded-lg p-4 prose prose-invert max-w-none bg-chat-assistant">
+      <div className="py-2 prose prose-invert max-w-none">
         <ReactMarkdown
           remarkPlugins={[remarkMath, remarkGfm]}
           rehypePlugins={[[rehypeKatex, { strict: false, throwOnError: false }]]}
@@ -439,14 +516,15 @@ function EnhancedAIMessage({ message, modelName, sidebarOpen }: { message: Messa
       </div>
     );
   }
-  
+
   // Enhanced layout - code buttons on execution results
   return (
     <div className="relative">
       {/* Main content area - full width, no compromise */}
-      <div className="rounded-lg p-4 bg-chat-assistant w-full">
+      <div className="py-2 w-full">
         <div className="prose prose-invert max-w-none">
           {parsedParts.map((part, idx) => {
+            // console.log('🔍 Rendering part', idx, 'type:', part.type);
             if (part.type === 'text') {
               return (
                 <div key={`text-${idx}`} className="leading-relaxed">
@@ -589,7 +667,8 @@ function EnhancedAIMessage({ message, modelName, sidebarOpen }: { message: Messa
           } else if (part.type === 'failed') {
             // Show failed executions in red box (collapsed by default)
             const isCollapsed = !collapsedFailed.has(part.index);
-            
+            // console.log('🔴 Rendering FAILED part:', { idx, index: part.index, error: part.error, isCollapsed });
+
             return (
               <div key={`failed-${idx}`} className="my-4">
                 <div className="bg-red-500/10 rounded-lg border border-red-500/30">
@@ -655,7 +734,7 @@ function EnhancedAIMessage({ message, modelName, sidebarOpen }: { message: Messa
                   >
                     <div className="flex items-center gap-2 text-xs text-orange-400">
                       <Code2 className="w-4 h-4" />
-                      <span className="font-medium">Didn't Execute</span>
+                      <span className="font-medium">Failed After Previous Failure</span>
                       <span className="text-orange-300">
                         ({skippedBlocks.length} block{skippedBlocks.length !== 1 ? 's' : ''})
                       </span>
@@ -721,11 +800,8 @@ const ChatMessage = memo(({ message, sidebarOpen }: ChatMessageProps) => {
   // For user messages, keep simple layout
   if (isUser) {
     return (
-      <div className="flex gap-3 flex-row-reverse">
-        <div className="w-8 h-8 rounded-full flex items-center justify-center text-sm font-semibold flex-shrink-0 bg-chat-user text-white">
-          U
-        </div>
-        <div className="flex-1 rounded-lg p-4 prose prose-invert max-w-none overflow-hidden bg-chat-user text-white">
+      <div className="mb-1">
+        <div className="inline-block max-w-3xl prose prose-invert overflow-hidden bg-muted/50 rounded-2xl px-4 py-3">
           {message.images && message.images.length > 0 && (
             <div className="flex gap-2 mb-3 flex-wrap">
               {message.images.map((img, idx) => (
@@ -752,11 +828,8 @@ const ChatMessage = memo(({ message, sidebarOpen }: ChatMessageProps) => {
 
   // For AI messages, use enhanced spatial layout
   return (
-    <div className="flex gap-3">
-      <div className="w-8 h-8 rounded-full flex items-center justify-center text-sm font-semibold flex-shrink-0 bg-chat-assistant-avatar text-white">
-        AI
-      </div>
-      <div className="flex-1 overflow-hidden">
+    <div className="mb-1">
+      <div className="overflow-hidden">
         <EnhancedAIMessage message={message} modelName={modelName} sidebarOpen={sidebarOpen} />
       </div>
     </div>

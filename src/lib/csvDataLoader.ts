@@ -289,7 +289,9 @@ export async function loadCsvDataWithValueInfo(
             // Query a small sample for each CSV ID
             // For arrays, we'll create valueInfo for each one separately
             let processedCount = 0;
-            for (const id of csvIds) {
+            const totalFiles = csvIds.length;
+            for (let i = 0; i < csvIds.length; i++) {
+              const id = csvIds[i];
               const existingValueInfo = getValueInfo(id, 'csv', chatId);
               if (!existingValueInfo) {
                 try {
@@ -297,12 +299,12 @@ export async function loadCsvDataWithValueInfo(
                   const currentFile = files.find((f: any) => f.id === id);
                   const currentFileName = currentFile?.name || id;
 
-                  // Update progress for current file
-                  const progressPercent = Math.floor((processedCount / csvIds.length) * 90); // 0-90%
+                  // Update progress BEFORE starting work (use i, not processedCount)
+                  const startPercent = Math.floor((i / totalFiles) * 90); // 0-90%
                   if (onProgress) {
                     onProgress({
-                      file: fileNames.length > 1 ? `${currentFileName} (${processedCount + 1}/${csvIds.length})` : currentFileName,
-                      percent: progressPercent,
+                      file: fileNames.length > 1 ? `${currentFileName} (${i + 1}/${totalFiles})` : currentFileName,
+                      percent: startPercent,
                       message: 'Generating value info summary...'
                     });
                   }
@@ -315,19 +317,61 @@ export async function loadCsvDataWithValueInfo(
                     undefined // No progress callback to avoid nested loading bars
                   );
 
+                  // Update progress after querying (midpoint)
+                  const midPercent = Math.floor(((i + 0.5) / totalFiles) * 90);
+                  if (onProgress) {
+                    onProgress({
+                      file: fileNames.length > 1 ? `${currentFileName} (${i + 1}/${totalFiles})` : currentFileName,
+                      percent: midPercent,
+                      message: 'Generating value info summary...'
+                    });
+                  }
+
                   // Use a smaller sample for valueInfo creation (max 1000 rows)
                   const valueInfoSample = sampleData.slice(0, sampleSize);
                   if (valueInfoSample.length > 0) {
                     await createValueInfoForCsv(valueInfoSample, id, chatId, false);
                   }
+                  
+                  // Update progress after completing this file
                   processedCount++;
+                  const endPercent = Math.floor((processedCount / totalFiles) * 90);
+                  if (onProgress) {
+                    onProgress({
+                      file: fileNames.length > 1 ? `${currentFileName} (${processedCount}/${totalFiles})` : currentFileName,
+                      percent: endPercent,
+                      message: 'Generating value info summary...'
+                    });
+                  }
                 } catch (e) {
                   console.warn(`Failed to create valueInfo from DuckDB sample for ${id}:`, e);
                   processedCount++;
+                  // Update progress even on error
+                  const errorPercent = Math.floor((processedCount / totalFiles) * 90);
+                  if (onProgress) {
+                    const currentFile = files.find((f: any) => f.id === id);
+                    const currentFileName = currentFile?.name || id;
+                    onProgress({
+                      file: fileNames.length > 1 ? `${currentFileName} (${processedCount}/${totalFiles})` : currentFileName,
+                      percent: errorPercent,
+                      message: 'Generating value info summary...'
+                    });
+                  }
                   // Continue with next ID
                 }
               } else {
                 processedCount++;
+                // Update progress even for files that already have valueInfo
+                const skipPercent = Math.floor((processedCount / totalFiles) * 90);
+                if (onProgress) {
+                  const currentFile = files.find((f: any) => f.id === id);
+                  const currentFileName = currentFile?.name || id;
+                  onProgress({
+                    file: fileNames.length > 1 ? `${currentFileName} (${processedCount}/${totalFiles})` : currentFileName,
+                    percent: skipPercent,
+                    message: 'Generating value info summary...'
+                  });
+                }
               }
             }
 

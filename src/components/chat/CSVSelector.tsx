@@ -14,7 +14,7 @@ interface CSVSelectorProps {
   selectedCsvIds: string[]; // Changed to array for multiple CSV selection
   selectedFilterColumns: string[];
   selectedFilterValues: Record<string, string | string[] | null>;
-  onSelectCsv: (csvIds: string[], filterColumns?: string[], filterValues?: Record<string, string | string[] | null>, displayColumns?: string[], displayValues?: Record<string, string | null>) => void;
+  onSelectCsv: (csvIds: string[], filterColumns?: string[], filterValues?: Record<string, string | string[] | null>, displayColumns?: string[], displayValues?: Record<string, string | null>, fileNames?: string[]) => void;
   chatId?: string; // Chat ID for tracking Value Info associations
   showGroupBy?: boolean; // Whether to show the group by section separately
   disabled?: boolean; // Disable when SQL selection is active
@@ -82,6 +82,13 @@ const CSVSelector = ({ selectedCsvIds, selectedFilterColumns, selectedFilterValu
       return { status: 'idle' };
     }
   });
+
+  // Helper to get file names from CSV IDs
+  const getFileNames = (csvIds: string[]): string[] => {
+    return csvIds
+      .map(id => csvFiles.find(f => f.id === id)?.name)
+      .filter((name): name is string => name !== undefined);
+  };
 
   // Sync upload status to sessionStorage
   useEffect(() => {
@@ -285,9 +292,8 @@ const CSVSelector = ({ selectedCsvIds, selectedFilterColumns, selectedFilterValu
     initializeDuckDBConnection();
   }, []);
 
-  const handleFileUpload = async (event: React.ChangeEvent<HTMLInputElement>) => {
-    const file = event.target.files?.[0];
-    if (!file) return;
+  // Helper function to process a single file
+  const processSingleFile = async (file: File, convertToParquetDefault?: boolean): Promise<boolean> => {
     const fileSizeMB = file.size / (1024 * 1024);
     const fileSizeGB = file.size / (1024 * 1024 * 1024);
 
@@ -300,49 +306,11 @@ const CSVSelector = ({ selectedCsvIds, selectedFilterColumns, selectedFilterValu
     setUploadStatus({ status: 'reading', message: processingMessage, fileName: file.name });
 
     try {
-      // Try to initialize DuckDB if not already initialized
-      let duckDBAvailable = isDuckDBInitialized();
+      // DuckDB should already be initialized by the caller
+      const duckDBAvailable = isDuckDBInitialized();
       
-      if (!duckDBAvailable && !isInitializingDuckDB) {
-        console.log('DuckDB not initialized, attempting initialization...');
-        setIsInitializingDuckDB(true);
-        try {
-          duckDBAvailable = await safeInitializeDuckDB();
-          if (duckDBAvailable) {
-            console.log('✅ DuckDB initialized successfully');
-          } else {
-            console.error('❌ DuckDB initialization failed - DuckDB is required');
-            setUploadStatus({
-              status: 'error',
-              message: 'DuckDB initialization failed. Please refresh the page and try again. DuckDB is required for data file processing.',
-              fileName: file.name
-            });
-            setTimeout(() => setUploadStatus({ status: 'idle' }), 10000);
-            return;
-          }
-        } catch (initError) {
-          console.error('❌ DuckDB initialization error:', initError);
-          setUploadStatus({ 
-            status: 'error', 
-            message: `DuckDB initialization failed: ${initError instanceof Error ? initError.message : 'Unknown error'}. Please refresh the page and try again.`, 
-            fileName: file.name 
-          });
-          setTimeout(() => setUploadStatus({ status: 'idle' }), 10000);
-          return;
-        } finally {
-          setIsInitializingDuckDB(false);
-        }
-      }
-      
-      // If still not available after initialization attempt, show error
       if (!duckDBAvailable) {
-        setUploadStatus({
-          status: 'error',
-          message: 'DuckDB is not available. Please refresh the page and try again. DuckDB is required for data file processing.',
-          fileName: file.name
-        });
-        setTimeout(() => setUploadStatus({ status: 'idle' }), 10000);
-        return;
+        throw new Error('DuckDB is not available. Please ensure DuckDB is initialized.');
       }
       
       if (duckDBAvailable) {
@@ -359,9 +327,9 @@ const CSVSelector = ({ selectedCsvIds, selectedFilterColumns, selectedFilterValu
           // Generate the ID first, then pass it to the appropriate processor
           const csvFileId = generatePrefixedId('csv');
 
-          // Ask user if they want to convert to Parquet (unless already Parquet)
-          let convertToParquet = true;
-          if (fileExtension !== 'parquet') {
+          // Ask user if they want to convert to Parquet (unless already Parquet or default provided)
+          let convertToParquet = convertToParquetDefault !== undefined ? convertToParquetDefault : true;
+          if (fileExtension !== 'parquet' && convertToParquetDefault === undefined) {
             // Show custom confirmation UI in upload status
             setUploadStatus({
               status: 'reading',
@@ -479,32 +447,15 @@ const CSVSelector = ({ selectedCsvIds, selectedFilterColumns, selectedFilterValu
             console.error('CSVSelector: Error saving metadata to IndexedDB:', metadataError);
           }
 
-          // Reset status after brief delay
-          setTimeout(() => setUploadStatus({ status: 'idle' }), 1000);
-          return;
+          // Return the Parquet conversion choice for use with subsequent files
+          return convertToParquet;
         } catch (duckDBError) {
           console.error('DuckDB processing failed:', duckDBError);
-          setUploadStatus({
-            status: 'error',
-            message: `DuckDB processing failed: ${duckDBError instanceof Error ? duckDBError.message : 'Unknown error'}. DuckDB is required for data file processing.`,
-            fileName: file.name
-          });
-          setTimeout(() => setUploadStatus({ status: 'idle' }), 5000);
-          return;
+          throw new Error(`DuckDB processing failed: ${duckDBError instanceof Error ? duckDBError.message : 'Unknown error'}. DuckDB is required for data file processing.`);
         }
       } else {
-        // DuckDB-only: No fallback
-        setUploadStatus({
-          status: 'error',
-          message: 'DuckDB is required for data file processing. Please ensure DuckDB is available.',
-          fileName: file.name
-        });
-        setTimeout(() => setUploadStatus({ status: 'idle' }), 5000);
-        return;
+        throw new Error('DuckDB is required for data file processing. Please ensure DuckDB is available.');
       }
-
-      // DuckDB-only: This code should never be reached
-      throw new Error('DuckDB is required for data file processing. Please ensure DuckDB is available.');
     } catch (error) {
       const displayMessage = error instanceof Error ? error.message : 'An unknown error occurred';
       const errorDetails = error instanceof Error ? error.stack : String(error);
@@ -520,6 +471,162 @@ const CSVSelector = ({ selectedCsvIds, selectedFilterColumns, selectedFilterValu
       
       // Show error for 10 seconds, then reset
       setTimeout(() => setUploadStatus({ status: 'idle' }), 10000);
+      throw error; // Re-throw to be caught by the main handler
+    }
+  };
+
+  const handleFileUpload = async (event: React.ChangeEvent<HTMLInputElement>) => {
+    const files = event.target.files;
+    if (!files || files.length === 0) return;
+
+    const fileArray = Array.from(files);
+    let convertToParquetChoice: boolean | undefined = undefined;
+
+    try {
+      // Initialize DuckDB once for all files
+      let duckDBAvailable = isDuckDBInitialized();
+      
+      if (!duckDBAvailable && !isInitializingDuckDB) {
+        console.log('DuckDB not initialized, attempting initialization...');
+        setIsInitializingDuckDB(true);
+        try {
+          duckDBAvailable = await safeInitializeDuckDB();
+          if (duckDBAvailable) {
+            console.log('✅ DuckDB initialized successfully');
+          } else {
+            console.error('❌ DuckDB initialization failed - DuckDB is required');
+            setUploadStatus({
+              status: 'error',
+              message: 'DuckDB initialization failed. Please refresh the page and try again. DuckDB is required for data file processing.',
+              fileName: fileArray.length > 1 ? `${fileArray.length} files` : fileArray[0].name
+            });
+            setTimeout(() => setUploadStatus({ status: 'idle' }), 10000);
+            return;
+          }
+        } catch (initError) {
+          console.error('❌ DuckDB initialization error:', initError);
+          setUploadStatus({ 
+            status: 'error', 
+            message: `DuckDB initialization failed: ${initError instanceof Error ? initError.message : 'Unknown error'}. Please refresh the page and try again.`, 
+            fileName: fileArray.length > 1 ? `${fileArray.length} files` : fileArray[0].name
+          });
+          setTimeout(() => setUploadStatus({ status: 'idle' }), 10000);
+          return;
+        } finally {
+          setIsInitializingDuckDB(false);
+        }
+      }
+
+      if (!duckDBAvailable) {
+        setUploadStatus({
+          status: 'error',
+          message: 'DuckDB is not available. Please refresh the page and try again. DuckDB is required for data file processing.',
+          fileName: fileArray.length > 1 ? `${fileArray.length} files` : fileArray[0].name
+        });
+        setTimeout(() => setUploadStatus({ status: 'idle' }), 10000);
+        return;
+      }
+
+      // If multiple files and none are Parquet, ask about conversion once for all files
+      if (fileArray.length > 1 && convertToParquetChoice === undefined) {
+        const hasNonParquetFiles = fileArray.some(f => {
+          const ext = f.name.toLowerCase().split('.').pop() || '';
+          return ext !== 'parquet';
+        });
+        
+        if (hasNonParquetFiles) {
+          setUploadStatus({
+            status: 'reading',
+            message: `Convert ${fileArray.length} files to Parquet format?`,
+            fileName: fileArray.length > 1 ? `${fileArray.length} files` : fileArray[0].name
+          });
+
+          // Wait for user confirmation via custom UI
+          convertToParquetChoice = await new Promise<boolean>((resolve) => {
+            setPendingParquetConversion({
+              file: fileArray[0], // Use first file for the prompt UI
+              csvFileId: 'multiple', // Indicates multiple files
+              fileExtension: 'multiple',
+              onConfirm: resolve
+            });
+          });
+
+          // Show user's choice
+          setUploadStatus({
+            status: 'reading',
+            message: convertToParquetChoice
+              ? `✓ Will convert ${fileArray.length} files to Parquet for better performance`
+              : `✗ Skipping Parquet conversion for ${fileArray.length} files`,
+            fileName: fileArray.length > 1 ? `${fileArray.length} files` : fileArray[0].name
+          });
+
+          // Brief pause to show the user's choice
+          await new Promise(resolve => setTimeout(resolve, 800));
+        }
+      }
+
+      // Process each file sequentially
+      for (let i = 0; i < fileArray.length; i++) {
+        const file = fileArray[i];
+        const isLastFile = i === fileArray.length - 1;
+        
+        try {
+          if (fileArray.length > 1) {
+            setUploadStatus({
+              status: 'reading',
+              message: `Processing file ${i + 1} of ${fileArray.length}: ${file.name}`,
+              fileName: file.name
+            });
+          }
+          
+          // For single file, the prompt will be shown in processSingleFile
+          // For multiple files, we already have the choice, so pass it along
+          const parquetChoice = await processSingleFile(file, convertToParquetChoice);
+          
+          // Use the first file's Parquet choice for all subsequent files (if not already set)
+          if (i === 0 && convertToParquetChoice === undefined) {
+            convertToParquetChoice = parquetChoice;
+          }
+          
+          if (isLastFile) {
+            setUploadStatus({ 
+              status: 'success', 
+              message: fileArray.length > 1 
+                ? `Successfully uploaded ${fileArray.length} files` 
+                : `Successfully uploaded ${file.name}`,
+              fileName: file.name 
+            });
+            setTimeout(() => setUploadStatus({ status: 'idle' }), 2000);
+          }
+        } catch (fileError) {
+          console.error(`Error processing file ${file.name}:`, fileError);
+          // Continue with next file even if one fails
+          if (isLastFile) {
+            setUploadStatus({
+              status: 'error',
+              message: `Some files failed to upload. Check console for details.`,
+              fileName: fileArray.length > 1 ? `${fileArray.length} files` : file.name
+            });
+            setTimeout(() => setUploadStatus({ status: 'idle' }), 5000);
+          }
+        }
+      }
+    } catch (error) {
+      const displayMessage = error instanceof Error ? error.message : 'An unknown error occurred';
+      console.error('CSVSelector: Error uploading files:', error);
+      
+      setUploadStatus({ 
+        status: 'error', 
+        message: `Error: ${displayMessage}. Check console for details.`, 
+        fileName: fileArray.length > 1 ? `${fileArray.length} files` : fileArray[0]?.name || 'unknown'
+      });
+      
+      setTimeout(() => setUploadStatus({ status: 'idle' }), 10000);
+    } finally {
+      // Reset the file input so the same files can be selected again if needed
+      if (fileInputRef.current) {
+        fileInputRef.current.value = '';
+      }
     }
   };
 
@@ -1157,7 +1264,7 @@ const CSVSelector = ({ selectedCsvIds, selectedFilterColumns, selectedFilterValu
       setGroupedRowsWithDisplay([]);
     }
 
-    onSelectCsv(selectedCsvIds, groupColumns, filteredNewValues, displayColumns, displayValues);
+    onSelectCsv(selectedCsvIds, groupColumns, filteredNewValues, displayColumns, displayValues, getFileNames(selectedCsvIds));
   };
 
   const handleBatchValueSelect = async (column: string, values: string[], select: boolean) => {
@@ -1200,7 +1307,7 @@ const CSVSelector = ({ selectedCsvIds, selectedFilterColumns, selectedFilterValu
 
       // Use requestAnimationFrame for smooth update
       requestAnimationFrame(() => {
-        onSelectCsv(selectedCsvIds, groupColumns, newValues, displayColumns, newDisplayValues);
+        onSelectCsv(selectedCsvIds, groupColumns, newValues, displayColumns, newDisplayValues, getFileNames(selectedCsvIds));
       });
       return;
     }
@@ -1303,7 +1410,7 @@ const CSVSelector = ({ selectedCsvIds, selectedFilterColumns, selectedFilterValu
 
     // Use requestAnimationFrame for smooth update
     requestAnimationFrame(() => {
-      onSelectCsv(selectedCsvIds, groupColumns, newValues, displayColumns, newDisplayValues);
+      onSelectCsv(selectedCsvIds, groupColumns, newValues, displayColumns, newDisplayValues, getFileNames(selectedCsvIds));
     });
   };
 
@@ -1553,7 +1660,7 @@ const CSVSelector = ({ selectedCsvIds, selectedFilterColumns, selectedFilterValu
       // Update display values in state
       setDisplayValuesState(displayValues);
 
-      onSelectCsv(selectedCsvIds, groupColumns, newValues, displayColumns, displayValues);
+      onSelectCsv(selectedCsvIds, groupColumns, newValues, displayColumns, displayValues, getFileNames(selectedCsvIds));
     }
 
     // Re-query grouped values when mode changes
@@ -1593,7 +1700,7 @@ const CSVSelector = ({ selectedCsvIds, selectedFilterColumns, selectedFilterValu
       const validGroupColumns = groupColumns.filter(col => remainingHeaders.has(col));
       const validDisplayColumns = displayColumns.filter(col => remainingHeaders.has(col));
 
-      onSelectCsv(newIds, validGroupColumns, validFilterValues, validDisplayColumns, undefined);
+      onSelectCsv(newIds, validGroupColumns, validFilterValues, validDisplayColumns, undefined, getFileNames(newIds));
     } else {
       // Add to selection
       const newIds = [...selectedCsvIds, csvId];
@@ -1629,7 +1736,7 @@ const CSVSelector = ({ selectedCsvIds, selectedFilterColumns, selectedFilterValu
         }
       }
 
-      onSelectCsv(newIds, newGroupColumns, newFilterValues, newDisplayColumns, undefined);
+      onSelectCsv(newIds, newGroupColumns, newFilterValues, newDisplayColumns, undefined, getFileNames(newIds));
     }
   };
 
@@ -1642,7 +1749,7 @@ const CSVSelector = ({ selectedCsvIds, selectedFilterColumns, selectedFilterValu
     const emptyValues: Record<string, string | string[] | null> = {};
     const groupColumns = selectedFilterColumns.filter(col => columnModes[col] === 'group' || !columnModes[col]);
     const displayColumns = selectedFilterColumns.filter(col => columnModes[col] === 'display');
-    onSelectCsv(selectedCsvIds, groupColumns, emptyValues, displayColumns, {});
+    onSelectCsv(selectedCsvIds, groupColumns, emptyValues, displayColumns, {}, getFileNames(selectedCsvIds));
   };
 
   // Helper function to handle valueInfo for DuckDB files (called asynchronously)
@@ -1875,7 +1982,7 @@ const CSVSelector = ({ selectedCsvIds, selectedFilterColumns, selectedFilterValu
           }, 300);
           
           // Call onSelectCsv so user can start using the data
-          onSelectCsv(selectedCsvIds, finalFilterColumns, finalFilterValues, finalDisplayColumns, finalDisplayValues);
+          onSelectCsv(selectedCsvIds, finalFilterColumns, finalFilterValues, finalDisplayColumns, finalDisplayValues, getFileNames(selectedCsvIds));
           setDisplayValuesState({});
           return; // Exit early - we're done
         } catch (verifyError) {
@@ -2327,16 +2434,17 @@ const CSVSelector = ({ selectedCsvIds, selectedFilterColumns, selectedFilterValu
           </div>
         </div>
       )}
-      <div className="flex gap-2 items-center">
+      <div className="flex gap-1.5 items-center">
         <input
           ref={fileInputRef}
           type="file"
           accept=".csv,.parquet,.xlsx,.xls,.json"
+          multiple
           onChange={handleFileUpload}
           className="hidden"
           disabled={isAnyLoading || disabled}
         />
-        <div className="flex items-center gap-2 flex-shrink-0">
+        <div className="flex items-center gap-1.5 flex-shrink-0">
         <Button
           variant="outline"
           size="sm"
@@ -2442,7 +2550,7 @@ const CSVSelector = ({ selectedCsvIds, selectedFilterColumns, selectedFilterValu
                       size="sm"
                       className="h-6 w-6 p-0"
                       onClick={() => {
-                        onSelectCsv([], selectedFilterColumns, selectedFilterValues, [], {});
+                        onSelectCsv([], selectedFilterColumns, selectedFilterValues, [], {}, []);
                         setIsOpen(false);
                       }}
                     >
@@ -2550,88 +2658,6 @@ const CSVSelector = ({ selectedCsvIds, selectedFilterColumns, selectedFilterValu
           </div>
         )}
       </div>
-      
-      {/* Selected Data Banner - same as MatchSelector */}
-      {selectedCsvIds.length > 0 && selectedFilterColumns.length > 0 && (() => {
-        // Only show group columns that have values (exclude display columns)
-        const groupColumnsWithValues = selectedFilterColumns
-          .filter(col => (columnModes[col] === 'group' || !columnModes[col]) && selectedFilterValues[col] != null);
-        return groupColumnsWithValues.length > 0;
-      })() && (
-        <div className="mt-2 flex items-center gap-2 p-2 bg-primary/20 rounded-lg border border-primary/30">
-          <div className="flex-1 min-w-0">
-            <div className="text-sm font-medium text-primary">
-              Active Dataset: {selectedFilterColumns
-                .filter(col => {
-                  const isGroup = columnModes[col] === 'group' || !columnModes[col];
-                  const isNotDisplay = columnModes[col] !== 'display';
-                  const hasValue = selectedFilterValues[col] != null;
-                  return isGroup && isNotDisplay && hasValue;
-                })
-                .map(col => {
-                const value = selectedFilterValues[col];
-                const colLabel = availableColumns.find(c => c.value === col)?.label || col;
-                if (value === '__SELECT_ALL__') {
-                  return `${colLabel}=All`;
-                }
-                if (Array.isArray(value)) {
-                  const maxDisplay = 2;
-                  if (value.length > maxDisplay) {
-                    const displayed = value.slice(0, maxDisplay).join(', ');
-                    return `${colLabel}=${displayed}... (${value.length} total)`;
-                  }
-                  return `${colLabel}=${value.join(', ')}`;
-                }
-                return value ? `${colLabel}=${value}` : null;
-              }).filter(Boolean).join(', ')}
-              {(() => {
-                const fileNames = selectedCsvIds
-                  .map(id => csvFiles.find((f: any) => f.id === id)?.name)
-                  .filter((name): name is string => name !== undefined);
-
-                if (fileNames.length === 0) return '';
-                if (fileNames.length === 1) return ` | CSV: ${fileNames[0]}`;
-                if (fileNames.length === 2) return ` | CSV: ${fileNames.join(', ')}`;
-                return ` | CSV: ${fileNames.slice(0, 2).join(', ')}... (${fileNames.length} total)`;
-              })()}
-            </div>
-            <div className="text-xs text-muted-foreground">
-              {isFinalizing ? finalizeProgress : (() => {
-                const groupColumns = selectedFilterColumns.filter(col => (columnModes[col] === 'group' || !columnModes[col]) && selectedFilterValues[col] != null);
-                // Check if any column has __SELECT_ALL__
-                const hasSelectAll = groupColumns.some(col => selectedFilterValues[col] === '__SELECT_ALL__');
-                if (hasSelectAll) {
-                  return 'All values selected';
-                }
-                const totalValues = groupColumns.reduce((sum, col) => {
-                  const val = selectedFilterValues[col];
-                  return sum + (Array.isArray(val) ? val.length : (val ? 1 : 0));
-                }, 0);
-                return totalValues > 0 ? `${totalValues} value${totalValues > 1 ? 's' : ''} selected` : 'Ready';
-              })()}
-            </div>
-          </div>
-          <Button
-            variant="ghost"
-            size="icon"
-            className="h-6 w-6"
-            onClick={handleFinalizeSelection}
-            disabled={isFinalizing || disabled}
-            title="Finalize selection"
-          >
-            <Check className="h-4 w-4" />
-          </Button>
-          <Button
-            variant="ghost"
-            size="icon"
-            className="h-6 w-6"
-            onClick={handleClearSelection}
-            disabled={isFinalizing || disabled}
-          >
-            <X className="h-4 w-4" />
-          </Button>
-        </div>
-      )}
     </div>
   );
 };

@@ -1,56 +1,83 @@
-import { BarChart3, TrendingUp, Database, Sparkles } from "lucide-react";
+import { BarChart3, TrendingUp, Database, Sparkles, Zap, LineChart, FileUp, MessageSquare, ArrowRight } from "lucide-react";
 
 const WelcomeScreen = () => {
   return (
-    <div className="flex items-center justify-center md:min-h-full md:p-8 p-3 py-4">
-      <div className="max-w-3xl text-center md:space-y-8 space-y-2 animation-fade-in">
-        <div>
-          <h1 className="md:text-4xl text-xl font-bold md:mb-3 mb-1 bg-gradient-to-r from-primary to-primary/60 bg-clip-text text-transparent">
-            Data Analytics AI
+    <div className="flex flex-col items-center justify-center h-full w-full p-6 md:p-10">
+      <div className="max-w-6xl w-full space-y-8 animation-fade-in">
+        {/* Hero Section */}
+        <div className="text-center mb-4">
+          <h1 className="text-2xl md:text-3xl font-bold text-foreground">
+            Get Started
           </h1>
-          <p className="md:text-lg text-xs text-muted-foreground md:block hidden">
-            Your intelligent assistant for data analysis and insights
-          </p>
         </div>
 
-        <div className="grid grid-cols-2 md:grid-cols-2 gap-2 md:gap-4 md:mt-12 mt-2">
-          <div className="bg-chat-assistant rounded-lg md:p-6 p-2 hover:bg-chat-hover transition-colors">
-            <BarChart3 className="md:h-8 md:w-8 h-5 w-5 text-primary md:mb-3 mb-1 mx-auto" />
-            <h3 className="font-semibold md:mb-2 mb-0 md:text-base text-xs">Data Analysis</h3>
-            <p className="text-xs md:text-sm text-muted-foreground md:block hidden">
-              Explore your data with comprehensive statistics and visualizations
+        {/* Getting Started Steps */}
+        <div className="grid md:grid-cols-3 gap-4 md:gap-6 mb-8">
+          <div className="bg-gradient-to-br from-card to-card/30 rounded-2xl p-6 border border-border/40 hover:border-primary/40 transition-all group">
+            <div className="flex items-center gap-4 mb-4">
+              <div className="p-3 bg-primary/10 rounded-xl group-hover:scale-110 transition-transform">
+                <FileUp className="h-6 w-6 text-primary" />
+              </div>
+              <div className="text-2xl font-bold text-primary">1</div>
+            </div>
+            <h3 className="text-lg font-semibold mb-2">Upload Data</h3>
+            <p className="text-sm text-muted-foreground">
+              Upload CSV, Excel, or connect to a database
             </p>
           </div>
 
-          <div className="bg-chat-assistant rounded-lg md:p-6 p-2 hover:bg-chat-hover transition-colors">
-            <TrendingUp className="md:h-8 md:w-8 h-5 w-5 text-primary md:mb-3 mb-1 mx-auto" />
-            <h3 className="font-semibold md:mb-2 mb-0 md:text-base text-xs">Pattern Recognition</h3>
-            <p className="text-xs md:text-sm text-muted-foreground md:block hidden">
-              Identify trends, correlations, and patterns across your datasets
+          <div className="bg-gradient-to-br from-card to-card/30 rounded-2xl p-6 border border-border/40 hover:border-primary/40 transition-all group">
+            <div className="flex items-center gap-4 mb-4">
+              <div className="p-3 bg-primary/10 rounded-xl group-hover:scale-110 transition-transform">
+                <MessageSquare className="h-6 w-6 text-primary" />
+              </div>
+              <div className="text-2xl font-bold text-primary">2</div>
+            </div>
+            <h3 className="text-lg font-semibold mb-2">Ask Questions</h3>
+            <p className="text-sm text-muted-foreground">
+              Chat naturally about your data and get instant insights
             </p>
           </div>
 
-          <div className="bg-chat-assistant rounded-lg md:p-6 p-2 hover:bg-chat-hover transition-colors">
-            <Database className="md:h-8 md:w-8 h-5 w-5 text-primary md:mb-3 mb-1 mx-auto" />
-            <h3 className="font-semibold md:mb-2 mb-0 md:text-base text-xs">Data Exploration</h3>
-            <p className="text-xs md:text-sm text-muted-foreground md:block hidden">
-              Query and analyze data from databases, CSV files, or custom sources
-            </p>
-          </div>
-
-          <div className="bg-chat-assistant rounded-lg md:p-6 p-2 hover:bg-chat-hover transition-colors">
-            <Sparkles className="md:h-8 md:w-8 h-5 w-5 text-primary md:mb-3 mb-1 mx-auto" />
-            <h3 className="font-semibold md:mb-2 mb-0 md:text-base text-xs">AI-Powered Insights</h3>
-            <p className="text-xs md:text-sm text-muted-foreground md:block hidden">
-              Get intelligent recommendations and actionable insights from your data
+          <div className="bg-gradient-to-br from-card to-card/30 rounded-2xl p-6 border border-border/40 hover:border-primary/40 transition-all group">
+            <div className="flex items-center gap-4 mb-4">
+              <div className="p-3 bg-primary/10 rounded-xl group-hover:scale-110 transition-transform">
+                <Sparkles className="h-6 w-6 text-primary" />
+              </div>
+              <div className="text-2xl font-bold text-primary">3</div>
+            </div>
+            <h3 className="text-lg font-semibold mb-2">Get Insights</h3>
+            <p className="text-sm text-muted-foreground">
+              Receive AI-powered analysis, charts, and recommendations
             </p>
           </div>
         </div>
 
-        <div className="md:pt-6 pt-2">
-          <p className="text-xs md:text-sm text-muted-foreground">
-            Start by selecting your data source above, or type a question to begin analyzing
-          </p>
+        {/* Capabilities */}
+        <div className="text-center">
+          <p className="text-xs text-muted-foreground/60 mb-3">Platform Capabilities</p>
+          <div className="flex flex-wrap justify-center gap-2">
+            <div className="px-3 py-1.5 bg-card/30 rounded-full border border-border/30 flex items-center gap-2">
+              <TrendingUp className="h-3.5 w-3.5 text-primary/70" />
+              <span className="text-xs text-muted-foreground">Pattern Recognition</span>
+            </div>
+            <div className="px-3 py-1.5 bg-card/30 rounded-full border border-border/30 flex items-center gap-2">
+              <LineChart className="h-3.5 w-3.5 text-primary/70" />
+              <span className="text-xs text-muted-foreground">Visualizations</span>
+            </div>
+            <div className="px-3 py-1.5 bg-card/30 rounded-full border border-border/30 flex items-center gap-2">
+              <Zap className="h-3.5 w-3.5 text-primary/70" />
+              <span className="text-xs text-muted-foreground">Live Analysis</span>
+            </div>
+            <div className="px-3 py-1.5 bg-card/30 rounded-full border border-border/30 flex items-center gap-2">
+              <Database className="h-3.5 w-3.5 text-primary/70" />
+              <span className="text-xs text-muted-foreground">Data Exploration</span>
+            </div>
+            <div className="px-3 py-1.5 bg-card/30 rounded-full border border-border/30 flex items-center gap-2">
+              <BarChart3 className="h-3.5 w-3.5 text-primary/70" />
+              <span className="text-xs text-muted-foreground">Statistics</span>
+            </div>
+          </div>
         </div>
       </div>
     </div>

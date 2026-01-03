@@ -17,7 +17,6 @@ import {
 import { loadCsvDataWithValueInfo, getCurrentSelectionData } from "./csvDataLoader";
 
 // Debug flag - set to false in production to reduce console noise
-const DEBUG = false;
 
 import { getAvailableModelsFormat } from "./openRouterModels";
 
@@ -75,16 +74,12 @@ async function isInfiniteLoop(chatId: string, responseContent: string): Promise<
 
   // If we've seen this response pattern before, it's likely a loop
   if (history.has(hash)) {
-    console.warn('🔄 INFINITE LOOP DETECTED - Same response pattern repeated');
-    console.warn('   Hash:', hash.substring(0, 16) + '...');
     return true;
   }
 
   // CRITICAL: If we've seen too many followups in this chat (>8), it's likely a loop
   // This is an absolute safety limit regardless of maxFollowupDepth setting
   if (history.size >= 8) {
-    console.warn('🔄 INFINITE LOOP DETECTED - Too many followups (>8) in single conversation');
-    console.warn('   This is an absolute safety limit. Consider if task can be completed.');
     return true;
   }
 
@@ -111,26 +106,12 @@ export function clearFollowUpHistory(chatId: string) {
 // Generate COMPACT column info string - optimized for clarity and tokens
 // NOTE: This shows SAMPLED unique values from valueInfo (max 20), not all unique values in dataset
 function generateColumnInfoString(columns: ColumnInfo[], _totalRowCount?: number): string {
+  // Removed sample values to save tokens - AI can query if needed
   return columns.filter(col => col.name !== '__index').map((col) => {
-    const uniqueVals = col.uniqueValues && Array.isArray(col.uniqueValues) && col.uniqueValues.length > 0
-      ? col.uniqueValues.slice(0, 5).map((v: any) => {
-          if (v === null || v === undefined) return 'null';
-          const str = String(v);
-          return str.length > 25 ? str.substring(0, 22) + '...' : str;
-        }).join(', ') + (col.uniqueValues.length > 5 ? ` +${col.uniqueValues.length - 5} more samples` : '')
-      : '';
-    
-    // Format: column_name (type, sampled unique count) | samples
-    // CRITICAL: Make it clear these are SAMPLES, not total unique values
     const uniqueCount = col.uniqueValues?.length || 0;
-    const typeInfo = `${col.type}${uniqueCount > 0 ? `, ${uniqueCount} sampled unique values` : ''}`;
-    const nullInfo = (col.nullCount ?? 0) > 0 ? ` | ${col.nullCount} null in sample` : '';
-    
-    if (uniqueVals) {
-      return `${col.name} (${typeInfo}): ${uniqueVals}${nullInfo}`;
-    } else {
-      return `${col.name} (${typeInfo})${nullInfo}`;
-    }
+    const typeInfo = `${col.type}${uniqueCount > 0 ? `, ${uniqueCount} sampled unique` : ''}`;
+    const nullInfo = (col.nullCount ?? 0) > 0 ? ` | ${col.nullCount} null` : '';
+    return `${col.name} (${typeInfo})${nullInfo}`;
   }).join('\n');
 }
 
@@ -162,19 +143,13 @@ function generateCompactColumnInfo(csvData: any[]): string {
     }
     
     const uniqueValues = Array.from(uniqueSet);
-    
-    // Show 4 sample values
-    const displayValues = uniqueValues.slice(0, 4).map(v => {
-      const str = String(v);
-      return str.length > 25 ? str.substring(0, 22) + '...' : str;
-    }).join(', ');
-    
-    // Show actual unique count from sample
+
+    // Removed sample values to save tokens - just show type and count
     const uniqueInfo = uniqueValues.length;
     const typeInfo = `${sampleType}, ${uniqueInfo}${uniqueInfo >= sampleSize ? '+' : ''} unique`;
     const nullInfo = nullCount > 0 ? ` | ${nullCount} null` : '';
-    
-    return `${colName} (${typeInfo}): ${displayValues}${uniqueValues.length > 4 ? ` +more` : ''}${nullInfo}`;
+
+    return `${colName} (${typeInfo})${nullInfo}`;
   }).join('\n');
 }
 
@@ -196,7 +171,7 @@ export const AVAILABLE_MODELS = getAvailableModelsFormat();
 
 // Helper function to load coding rules from localStorage
 function getCodingRules(): string {
-  const RULES_VERSION = "2.2"; // Increment this when rules change significantly
+  const RULES_VERSION = "2.3"; // Increment this when rules change significantly
   
   try {
     const saved = localStorage.getItem("db_coding_rules");
@@ -204,7 +179,6 @@ function getCodingRules(): string {
     
     // If version doesn't match, clear cached rules to get new defaults
     if (savedVersion !== RULES_VERSION) {
-      DEBUG && console.log(`Coding rules updated to v${RULES_VERSION}, clearing cached rules`);
       localStorage.removeItem("db_coding_rules");
       localStorage.setItem("db_coding_rules_version", RULES_VERSION);
       return getDefaultCodingRules();
@@ -230,10 +204,10 @@ export function getDefaultCodingRules(): string {
 🚨 CRITICAL: If you see "CODE EXECUTION COMPLETE" with results → DO NOT instantly re-plan or re-code → follow followup instructions!
 
 P.S. if you can answer a question without code, answer without code
-1. PLAN: List all steps needed (e.g., "Step 1: Load data, Step 2: Calculate stats, Step 3: Create chart")
-2. CODE: Write ALL \`\`\`execute blocks for each step (start each block with //step: N) 
-3. STOP - wait for results
-4. VERIFY: Check if all steps completed & answer user's question
+1. VERIFY: Check if all steps completed & answer user's question (if not a followup ignore)
+2. PLAN: List all steps needed (e.g., "Step 1: Load data, Step 2: Calculate stats, Step 3: Create chart")
+3. CODE: Write ALL \`\`\`execute blocks for each step (start each block with //step: N)
+4. STOP - wait for results
 5. If yes → ANALYZE results; If no → fix errors with more code
 
 🚨 DO NOT analyze dataset before executing code - write code FIRST, STOP, you will get results in next message
@@ -253,12 +227,6 @@ return { players };
 //step: 2
 return { echarts_chart: { option: { xAxis: { type: 'category', data: players.map(p => p.name) }, yAxis: { type: 'value' }, series: [{ type: 'bar', data: players.map(p => p.score) }] }}};
 \`\`\`
-
-✅ Plan → code all steps with labels → STOP → verify → analyze
-❌ Code without plan
-❌ Code → analyze immediately (no results yet!)
-❌ Code partial steps → wait → code more (do all at once!)
-❌ Analyze before executing code
 
 ═══ VARIABLE PERSISTENCE ═══
 🚨 ONLY returned values persist between blocks!
@@ -335,7 +303,6 @@ Chart not displaying → Key must be "echarts_chart": return { echarts_chart: { 
 🚨 NO FABRICATED DATA! Query real data, never make up results.
 
 ═══ KEY RULES ═══
-✅ Write all blocks → STOP → wait → analyze
 ✅ await query() + check: if (!rows || rows.length === 0)
 ✅ Return objects: return { matchId, data }
 ❌ No SQL comments in queries
@@ -407,7 +374,6 @@ async function getConversationHistory(history: Message[], chatId?: string): Prom
       const memoryManager = getOrCreateMemoryManager(chatId);
       return await memoryManager.getConversationContext();
     } catch (error) {
-      console.warn('Failed to get LangChain memory, falling back to processed history:', error);
       // Fallback to old method if LangChain fails
       return processConversationHistory(history);
     }
@@ -470,7 +436,6 @@ function processConversationHistory(history: Message[]): Message[] {
     }
   }
 
-  DEBUG && console.log(`📝 History compression: ${totalMessages} → ${processed.length} messages (code/results stripped)`);
   return processed;
 }
 
@@ -1054,7 +1019,6 @@ function buildConversationContext(newMessage: string, conversationHistory: Messa
   // Reduced history length to optimize token usage
   if (includeHistoryInPrompt && conversationHistory.length > 0) {
     const recentMessages = conversationHistory.slice(-8); // Reduced from 12 to 8 messages (4 exchanges) to save tokens
-    DEBUG && console.log('⚠️ Including conversation history in prompt - AI may reference old column names from previous messages');
     
     // Check if this is a new question (not a follow-up)
     const isNewQuestion = !newMessage.includes('Execution results') && 
@@ -1151,493 +1115,47 @@ export function buildVolleyballContext(
   csvId: string | string[] | null = null,
   chatId?: string
 ): string {
-  // If data analysis context is disabled, return generic AI assistant context
-  // But still include context sections if one is selected
-  if (!volleyballContextEnabled) {
-    return buildConversationContext(userMessage, conversationHistory, undefined, false, false, false, selectedContextSectionId, maxFollowupDepth, currentFollowupDepth, isLastFollowup);
+  // Simplified: Just coding rules + summary
+  // Build base context
+  const hasData = !!(matchData || csvData || csvFileName || csvId || currentSelectionValueInfo);
+  let context = buildConversationContext(
+    userMessage,
+    conversationHistory,
+    matchData ? { id: matchData.matchInfo.match_id } : undefined,
+    volleyballContextEnabled,
+    false, // includeHistory handled separately
+    hasData,
+    selectedContextSectionId,
+    maxFollowupDepth,
+    currentFollowupDepth,
+    isLastFollowup
+  );
+
+  // Get summary from valueInfo
+  let summaryText = '';
+  
+  // Priority: currentSelectionValueInfo > csvId > matchData
+  if (currentSelectionValueInfo?.summary) {
+    summaryText = `\n\n📋 DATASET SUMMARY:\n${currentSelectionValueInfo.summary}`;
+  } else if (csvId) {
+    const csvIds = Array.isArray(csvId) ? csvId : [csvId];
+    const csvValueInfo = csvIds.length > 0 ? getValueInfo(csvIds[0], 'csv', chatId) : null;
+    if (csvValueInfo?.summary) {
+      summaryText = `\n\n📋 DATASET SUMMARY:\n${csvValueInfo.summary}`;
+    }
+  } else if (matchData) {
+    const matchValueInfo = getValueInfo(matchData.matchInfo.match_id, 'match');
+    if (matchValueInfo?.summary) {
+      summaryText = `\n\n📋 DATASET SUMMARY:\n${matchValueInfo.summary}`;
+    }
   }
-  
-  let context = '';
-  
-  // Check for current_selection first (grouped data selection takes precedence)
-  // Only treat as having data if there's actual data array with rows
-  const hasCurrentSelectionData = currentSelectionValueInfo && 
-                                  currentSelectionValueInfo.data && 
-                                  Array.isArray(currentSelectionValueInfo.data) && 
-                                  currentSelectionValueInfo.data.length > 0;
-  
-  if (hasCurrentSelectionData) {
-    // Build context with current_selection data - history passed via messages array to avoid duplication
-    const includeHistory = false; // History handled via processConversationHistory() and messages array
-    context = buildConversationContext(userMessage, conversationHistory, undefined, true, includeHistory, true, selectedContextSectionId, maxFollowupDepth, currentFollowupDepth, isLastFollowup); // hasData = true (currentSelectionValueInfo has actual data)
-    
-    // OPTIMIZATION: Only include dataset summary on FIRST message (not repeated in follow-ups)
-    // Check if this is the first message with this dataset (no history or very short history)
-    // We include column details on first message AND if history is short (≤4 messages)
-    // This ensures follow-ups have the data context even if it was stripped from history
-    const isFirstMessageWithData = conversationHistory.length <= 4;
-    
-    if (isFirstMessageWithData) {
-      // Extract filter criteria from description (format: "Selected Group: col1=val1, col2=val2")
-      const filterDescription = currentSelectionValueInfo.description || currentSelectionValueInfo.name || 'Custom grouped selection';
-      
-      // Add concise selected data summary
-      const actualRowCount = currentSelectionValueInfo.data.length;
-      const totalRowCount = currentSelectionValueInfo.totalRowCount;
-      
-      let rowCountInfo = `Rows: ${actualRowCount}`;
-      if (totalRowCount && totalRowCount !== actualRowCount) {
-        rowCountInfo += ` (of ${totalRowCount.toLocaleString()} total matching)`;
-      }
-      
-      // Get the valueInfo summary if available (for current_selection)
-      // CRITICAL FIX: Use the currentSelectionValueInfo that was already passed in, don't look it up again
-      const summaryText = currentSelectionValueInfo?.summary ? `\n\n📋 DATASET SUMMARY:\n${currentSelectionValueInfo.summary}\n💡 Use the summary above to understand the data structure.\n` : '';
-      
-      context += `\n=== SELECTED DATA ===
-${rowCountInfo} | Filter: ${filterDescription}
-⚡ Use DuckDB SQL: await query('SELECT...') for all data operations
-${summaryText}
-📊 COLUMNS (${currentSelectionValueInfo.columns?.length || 0}):`;
-      
-      // Add column info compactly
-      if (currentSelectionValueInfo.columns) {
-        const columnInfo = generateColumnInfoString(currentSelectionValueInfo.columns, totalRowCount);
-        context += `\n${columnInfo}`;
-        context += `\n\n⚠️ IMPORTANT: Unique value counts above are from a SAMPLE only (max 20 unique values shown per column).`;
-        context += `\nThe actual dataset has ${actualRowCount.toLocaleString()} total rows${totalRowCount && totalRowCount !== actualRowCount ? ` (filtered from ${totalRowCount.toLocaleString()} total)` : ''}.`;
-        context += `\nTo get ACTUAL unique counts: await query('SELECT COUNT(DISTINCT column_name) FROM csvData')`;
-      }
-    } else {
-      // Follow-up message - just remind AI about data availability
-      context += `\n\n💡 Dataset info was provided in first message (see history). All columns and structure remain available.`;
-    }
-    
-    // Add dataset sample if data is available
-    if (currentSelectionValueInfo.data && Array.isArray(currentSelectionValueInfo.data) && currentSelectionValueInfo.data.length > 0) {
-      const sampleRow = currentSelectionValueInfo.data[0];
-      if (sampleRow) {
-        const sampleKeys = Object.keys(sampleRow).slice(0, 10);
-        context += `\n\n=== DATASET SAMPLE ===
-Sample row (first of ${currentSelectionValueInfo.data.length.toLocaleString()} rows):
-${JSON.stringify(Object.fromEntries(sampleKeys.map(key => [key, sampleRow[key]])), null, 2)}
-... (showing first 10 columns of first row)`;
-      }
-    }
-    
-    // IMPORTANT: If CSV data is available, ALWAYS include it even when current_selection exists
-    if (csvData && Array.isArray(csvData) && csvData.length > 0 && isFirstMessageWithData) {
-      const actualRowCount = csvData.length;
-      const columnInfo = generateCompactColumnInfo(csvData);
-      const sampleSize = Math.min(1000, actualRowCount);
-      const samplingNote = actualRowCount <= sampleSize 
-        ? `Column details above from all ${actualRowCount.toLocaleString()} rows (complete dataset).`
-        : `Column samples above from first ${sampleSize.toLocaleString()} rows. Query ALL ${actualRowCount.toLocaleString()} rows with query().`;
-      
-      // Get the valueInfo summary if available (use csvId, not fileName)
-      // CRITICAL FIX: When inside hasCurrentSelectionData block, use currentSelectionValueInfo for summary (has filter info)
-      // Otherwise fall back to base CSV valueInfo
-      const csvIds = csvId ? (Array.isArray(csvId) ? csvId : [csvId]) : [];
-      const baseCsvValueInfo = csvIds.length > 0 ? getValueInfo(csvIds[0], 'csv', chatId) : null;
-      // Use currentSelectionValueInfo summary if it has filters, otherwise use base CSV summary
-      const valueInfoForSummary = (currentSelectionValueInfo && (currentSelectionValueInfo.filterColumns || currentSelectionValueInfo.filterValues)) 
-        ? currentSelectionValueInfo 
-        : baseCsvValueInfo;
-      const summaryText = valueInfoForSummary?.summary ? `\n\n📋 DATASET SUMMARY:\n${valueInfoForSummary.summary}\n💡 Use the summary above to understand the data structure.\n` : '';
-      
-      context += `\n\n=== CSV DATA ===
-📁 ${csvFileName || 'CSV File'}
-📊 TOTAL ROWS: ${actualRowCount.toLocaleString()} (all loaded in memory)
-⚡ Use DuckDB SQL: await query('SELECT...') for all data operations
-${summaryText}
-COLUMNS (${Object.keys(csvData[0] || {}).length} total):
-${columnInfo}
 
-NOTE: ${samplingNote}`;
-    }
-    
-    // Load context sections from settings (use selected section if provided)
-    const contextSections = getContextSections(selectedContextSectionId || undefined);
-    context = contextSections + '\n\n' + context;
-    
-    return context;
+  // Add summary to context
+  if (summaryText) {
+    context += summaryText;
   }
-  
-  if (matchData) {
-    const { matchInfo, data, summary } = matchData;
-    
-    // CRITICAL: If currentSelectionValueInfo exists and has data, it should take precedence over matchData.
-    // This handles cases where "all matches" or a filtered selection is active.
-    const hasCurrentSelectionOverride = currentSelectionValueInfo && 
-                                       currentSelectionValueInfo.data && 
-                                       Array.isArray(currentSelectionValueInfo.data) && 
-                                       currentSelectionValueInfo.data.length > 0 &&
-                                       currentSelectionValueInfo.id === 'current_selection';
-    
-    // If this is a current selection (e.g., "all matches"), use currentSelectionValueInfo instead
-    if (hasCurrentSelectionOverride && currentSelectionValueInfo.summary) {
-      // Build context with current selection data instead of single match
-      const includeHistory = false;
-      context = buildConversationContext(userMessage, conversationHistory, undefined, true, includeHistory, true, selectedContextSectionId, maxFollowupDepth, currentFollowupDepth, isLastFollowup);
-      
-      const contextSections = getContextSections(selectedContextSectionId || undefined);
-      context = contextSections + '\n\n' + context;
-      
-      const isFirstMessageWithData = conversationHistory.length <= 4;
-      
-      if (isFirstMessageWithData) {
-        const actualRowCount = currentSelectionValueInfo.data?.length || data.length;
-        const totalRowCount = currentSelectionValueInfo.totalRowCount;
-        
-        let rowCountInfo = `Rows: ${actualRowCount}`;
-        if (totalRowCount && totalRowCount !== actualRowCount) {
-          rowCountInfo += ` (of ${totalRowCount.toLocaleString()} total)`;
-        }
-        
-        const summaryText = currentSelectionValueInfo.summary ? `\n\n📋 DATASET SUMMARY:\n${currentSelectionValueInfo.summary}\n` : '';
-        
-        context += `\n=== SELECTED DATA ===
-${rowCountInfo} | All Matches Selection
-⚡ Use DuckDB SQL: await query('SELECT...') for all data operations
-${summaryText}
-📊 COLUMNS (${currentSelectionValueInfo.columns?.length || 0}):`;
-        
-        if (currentSelectionValueInfo.columns) {
-          const columnInfo = generateColumnInfoString(currentSelectionValueInfo.columns, actualRowCount);
-          context += `\n${columnInfo}`;
-          context += `\n\n⚠️ IMPORTANT: Unique value counts above are from a SAMPLE only (max 20 unique values shown per column).`;
-          context += `\nThe actual dataset has ${actualRowCount.toLocaleString()} total rows${totalRowCount && totalRowCount !== actualRowCount ? ` (filtered from ${totalRowCount.toLocaleString()} total)` : ''}.`;
-          context += `\nTo get ACTUAL unique counts: await query('SELECT COUNT(DISTINCT column_name) FROM csvData')`;
-        }
-      } else {
-        context += `\n\n💡 Dataset info was provided in first message (see history). All columns and structure remain available.`;
-      }
-      
-      return context;
-    }
-    
-    // Build context with dataset info - history passed via messages array to avoid duplication
-    // History is handled by processConversationHistory() and passed as separate messages array
-    const includeHistory = false; // History handled via processConversationHistory() and messages array
-    
-    // Create generic dataInfo object from matchInfo (universal)
-    const dataInfo: DataInfo = {
-      id: matchInfo.match_id
-    };
-    // Include any other matchInfo fields as generic metadata
-    if (matchInfo.home_team) dataInfo.home_team = matchInfo.home_team;
-    if (matchInfo.visiting_team) dataInfo.visiting_team = matchInfo.visiting_team;
-    
-    context = buildConversationContext(userMessage, conversationHistory, dataInfo, true, includeHistory, true, selectedContextSectionId, maxFollowupDepth, currentFollowupDepth, isLastFollowup); // hasData = true (matchData exists)
-    
-    // Load context sections from settings (use selected section if provided)
-    const contextSections = getContextSections(selectedContextSectionId || undefined);
-    context = contextSections + '\n\n' + context;
-    
-    // OPTIMIZATION: Only include dataset summary on FIRST message
-    // Check if this is the first message with this dataset (no history or very short history)
-    // We include column details on first message AND if history is short (≤4 messages)
-    const isFirstMessageWithData = conversationHistory.length <= 4;
-    
-    if (isFirstMessageWithData) {
-      // Create condensed dataset summary (universal format)
-      const datasetSummary = `\n=== DATASET ===
-Rows: ${data.length}${matchInfo.home_team && matchInfo.visiting_team ? ` | ${matchInfo.home_team} vs ${matchInfo.visiting_team}` : ''}${summary.setScores ? ` | Sets: ${Object.entries(summary.setScores).map(([set, scores]) => `${set}:${scores.home}-${scores.visiting}`).join(' ')} | Result: ${summary.homeSetWins}-${summary.visitingSetWins}` : ''}
-[Internal ID: ${matchInfo.match_id} - for reference only, do not display]`;
-      
-      // Universal data structure reference
-      const dataStructure = `\n=== DATA STRUCTURE ===
-CRITICAL: Query ALL rows - never sample/estimate. Each row = one record.
 
-GENERAL PRINCIPLES:
-- Use exact column names from COLUMN DETAILS below - don't assume names
-- Use only column names in COLUMN DETAILS
-- If a column name doesn't exist in COLUMN DETAILS, it doesn't exist in the data - don't use it
-- ALWAYS use DuckDB SQL with await query() for all data operations (filtering, counting, aggregation, etc.)
-- Example: await query('SELECT COUNT(*) as count FROM csvData WHERE condition')
-- Always count all rows - never estimate
-- Inspect structure: await query('SELECT * FROM csvData LIMIT 1') to see available columns
-- Check columns in result: Object.keys((await query('SELECT * FROM csvData LIMIT 1'))[0])`;
-      
-      // Check if value info exists for this dataset - try multiple lookup strategies
-      let valueInfo = getValueInfo(matchInfo.match_id, 'match');
-      
-      // Fallback: try to find valueInfo by id as string or number
-      if (!valueInfo) {
-        const allValueInfos = getAllValueInfos();
-        valueInfo = allValueInfos.find((v: any) => 
-          v.type === 'match' && (
-            v.id === matchInfo.match_id ||
-            v.id?.toString() === matchInfo.match_id?.toString() ||
-            (matchInfo.home_team && v.name?.includes(matchInfo.home_team)) ||
-            (matchInfo.visiting_team && v.name?.includes(matchInfo.visiting_team))
-          )
-        ) || null;
-      }
-      
-      // Include the detailed summary if available
-      const summaryText = valueInfo?.summary ? `\n\n📋 DATASET SUMMARY:\n${valueInfo.summary}\n` : '';
-      
-      if (valueInfo && valueInfo.columns) {
-        // Value info exists - use COMPACT format
-        const columnInfo = generateColumnInfoString(valueInfo.columns, data.length);
-        context += `\n\n=== COLUMN DETAILS ===
-${columnInfo}
-
-⚠️ IMPORTANT: Unique value counts above are from a SAMPLE only (max 20 unique values shown per column).
-The actual dataset has ${data.length.toLocaleString()} total rows. To get ACTUAL unique counts, query the full data.
-
-Use exact column names above when writing queries.`;
-      } else {
-        // If no valueInfo, provide basic structure info (universal) with fallback instructions
-        context += `\n\n=== COLUMN DETAILS ===
-Inspect available columns: Object.keys(data[0])
-Use exact column names from the data structure - don't assume names.`;
-      }
-      
-      context += summaryText;
-      context += datasetSummary;
-      context += dataStructure;
-    } else {
-      // Follow-up message - just remind AI about data availability
-      context += `\n\n💡 Dataset info was provided in first message (see history). All columns and structure remain available.`;
-    }
-    
-    return context;
-  } else {
-    // No match data - check if CSV data or current selection exists
-    const hasCsvData = csvData && Array.isArray(csvData) && csvData.length > 0;
-    
-    // Check if there's a current_selection valueInfo with actual data (not just filter criteria)
-    // Check for CSV current_selection if csvFileName exists
-    // IMPORTANT: Use passed parameter first, then fall back to localStorage lookup
-    let currentSelectionValueInfoToUse = currentSelectionValueInfo;
-    if (!currentSelectionValueInfoToUse) {
-      const csvCurrentSelection = csvFileName ? getValueInfo('current_selection', 'csv') : null;
-      const matchCurrentSelection = getValueInfo('current_selection', 'match');
-      currentSelectionValueInfoToUse = csvCurrentSelection || matchCurrentSelection;
-    }
-    const hasCurrentSelectionData = currentSelectionValueInfoToUse && 
-                                    currentSelectionValueInfoToUse.data && 
-                                    Array.isArray(currentSelectionValueInfoToUse.data) && 
-                                    currentSelectionValueInfoToUse.data.length > 0;
-    
-    // OPTIMIZED: Simplified data selection check
-    // If csvFileName exists, data is selected (even if not in memory yet)
-    // CRITICAL FIX: Use currentSelectionValueInfoToUse (the looked-up valueInfo) instead of parameter
-    // Also check csvId - if it exists, data is available via DuckDB even if not in memory
-    const hasDataSelected = hasCsvData || hasCurrentSelectionData || !!currentSelectionValueInfoToUse || !!csvFileName || !!csvId;
-    context = buildConversationContext(userMessage, conversationHistory, undefined, volleyballContextEnabled, false, hasDataSelected, selectedContextSectionId, maxFollowupDepth, currentFollowupDepth, isLastFollowup);
-    
-    // OPTIMIZATION: Only include dataset summary on FIRST message
-    // Check if this is the first message with this dataset (no history or very short history)
-    // We include column details on first message AND if history is short (≤4 messages)
-    const isFirstMessageWithData = conversationHistory.length <= 4;
-    
-    // OPTIMIZED: Use currentSelectionValueInfo if it's a CSV selection
-    const valueInfoToUse = (currentSelectionValueInfo && currentSelectionValueInfo.type === 'csv') ? currentSelectionValueInfo : null;
-    if (valueInfoToUse && valueInfoToUse.columns && !hasCsvData && csvFileName && isFirstMessageWithData) {
-      // Get the valueInfo summary if available (use csvId, not fileName)
-      // CRITICAL FIX: Use valueInfoToUse (which is currentSelectionValueInfo) for summary when filters are applied
-      const csvIds = csvId ? (Array.isArray(csvId) ? csvId : [csvId]) : [];
-      const baseCsvValueInfo = csvIds.length > 0 ? getValueInfo(csvIds[0], 'csv', chatId) : null;
-      // Prefer valueInfoToUse summary (has filter info) over base CSV summary
-      const summaryText = (valueInfoToUse?.summary || baseCsvValueInfo?.summary) ? `\n\n📋 DATASET SUMMARY:\n${valueInfoToUse?.summary || baseCsvValueInfo?.summary}\n` : '';
-      
-      context += `\n\n=== CSV DATA ===
-File: ${csvFileName}
-${summaryText}
-COLUMN DETAILS:
-${valueInfoToUse.columns.map((col: any) => {
-  const uniqueVals = col.uniqueValues && Array.isArray(col.uniqueValues) && col.uniqueValues.length > 0
-    ? col.uniqueValues.slice(0, 6).map((v: any) => {
-        if (v === null || v === undefined) return 'null';
-        const str = String(v);
-        return str.length > 50 ? str.substring(0, 47) + '...' : str;
-      }).join(', ') + (col.uniqueValues.length > 6 ? ` ... (${col.uniqueValues.length} total)` : '')
-    : 'none';
-  return `${col.name} (${col.type}): [${uniqueVals}] | ${col.nullCount || 0} null`;
-}).join('\n')}
-
-Use exact column names. Use DuckDB SQL with await query('SELECT...') in \`\`\`execute blocks.
-
-⚠️ Wait for results before analyzing. DO NOT analyze before executing code.`;
-    } else if (valueInfoToUse && valueInfoToUse.columns && !hasCsvData && csvFileName && !isFirstMessageWithData) {
-      // Follow-up message with valueInfo but no csvData in memory
-      const columnNames = valueInfoToUse.columns.map((col: any) => col.name).join(', ');
-      const columnInfo = generateColumnInfoString(valueInfoToUse.columns, valueInfoToUse.totalRowCount || 0);
-      context += `\n\n=== CSV DATA (FOLLOW-UP) ===
-📁 ${csvFileName}
-
-AVAILABLE COLUMNS: ${columnNames}
-
-${columnInfo}
-
-⚠️ IMPORTANT: Use ONLY the column names listed above. Do NOT use information_schema (not available in DuckDB-WASM).
-To inspect columns: Object.keys(csvData[0]) or query a sample row.
-
-⚠️ Wait for results before analyzing. DO NOT analyze before executing code.`;
-    } else if (valueInfoToUse && !hasCsvData && csvFileName) {
-      // Fallback: Include at least the file name (no columns available or first message)
-      context += `\n\n=== CSV DATA ===
-File: ${csvFileName}
-Data is available - use DuckDB SQL with await query('SELECT...') in \`\`\`execute blocks.
-
-⚠️ Wait for results before analyzing. DO NOT analyze before executing code.`;
-    }
-    
-    if (hasCurrentSelectionData && isFirstMessageWithData) {
-      // Include current selection valueInfo in context (universal) - FIRST MESSAGE ONLY
-      const selectionInfo = currentSelectionValueInfo || currentSelectionValueInfoToUse;
-      const filterDescription = selectionInfo.description || selectionInfo.name || 'Custom selection';
-      const actualRowCount = selectionInfo.data.length;
-      const totalRowCount = selectionInfo.totalRowCount;
-      const isLimited = selectionInfo.isLimited && totalRowCount && totalRowCount > actualRowCount;
-      
-      let rowCountInfo = `Rows: ${actualRowCount}`;
-      if (isLimited) {
-        rowCountInfo += ` (limited from ${totalRowCount} total available)`;
-      }
-      
-      context += `\n\n=== SELECTED DATA ===
-${rowCountInfo} | Filter: ${filterDescription}
-CRITICAL: Data is pre-filtered by the system. The filters have ALREADY been applied.
-Use await query('SELECT...') to access the ${actualRowCount.toLocaleString()} filtered rows. Do NOT add filter conditions again.
-
-${selectionInfo.type === 'csv' 
-  ? 'Use DuckDB SQL with await query(\'SELECT...\') for all data operations - optimized for large datasets (100,000+ rows).' 
-  : 'Use DuckDB SQL with await query(\'SELECT...\') for all data operations:\n- Count: await query("SELECT COUNT(*) as total FROM data WHERE ...")\n- Sum/Avg: await query("SELECT SUM(column), AVG(column) FROM data WHERE ...")\n- Group by: await query("SELECT category, COUNT(*), AVG(value) FROM data WHERE ... GROUP BY category")\n- Filter: await query("SELECT * FROM data WHERE column = \'value\' AND column2 IN (\'val1\', \'val2\')")\n- You can use any DuckDB SQL patterns (JOIN, subqueries, window functions, etc.)'}`;
-      
-      if (selectionInfo.columns) {
-        const columnNames = selectionInfo.columns.map((col: any) => col.name).join(', ');
-        const columnInfo = generateColumnInfoString(selectionInfo.columns, totalRowCount);
-        context += `\n\nCOLUMN DETAILS:
-AVAILABLE COLUMNS: ${columnNames}
-
-${columnInfo}
-
-⚠️ IMPORTANT: Unique value counts above are from a SAMPLE only (max 20 unique values shown per column).
-The actual dataset has ${actualRowCount.toLocaleString()} total rows${isLimited ? ` (filtered from ${totalRowCount.toLocaleString()} total)` : ''}.
-To get ACTUAL unique counts: await query('SELECT COUNT(DISTINCT column_name) FROM csvData')
-
-Use only column names listed above.
-
-⚠️ Wait for results before analyzing. DO NOT analyze before executing code.`;
-      }
-    }
-    
-    // CRITICAL: Always include base CSV valueInfo summary when csvId exists and csvData is empty/null
-    // This ensures the AI gets the dataset summary even when data isn't loaded in memory
-    // Check this AFTER other conditions to ensure it's a fallback when no other data context was added
-    if (csvId && (!csvData || (Array.isArray(csvData) && csvData.length === 0)) && csvFileName && isFirstMessageWithData) {
-      // Only add if we haven't already added CSV context above
-      const alreadyAddedCsvContext = context.includes('=== CSV DATA ===') || context.includes('=== SELECTED DATA ===');
-      if (!alreadyAddedCsvContext) {
-        // DuckDB mode - csvData is empty but csvId exists (data available via DuckDB)
-        // Include valueInfo summary and column info even when data isn't loaded in memory
-        const csvIds = Array.isArray(csvId) ? csvId : [csvId];
-        const csvValueInfo = csvIds.length > 0 ? getValueInfo(csvIds[0], 'csv', chatId) : null;
-        const summaryText = csvValueInfo?.summary ? `\n\n📋 DATASET SUMMARY:\n${csvValueInfo.summary}\n💡 Use the summary above to understand the data structure.\n` : '';
-        
-        if (csvValueInfo && csvValueInfo.columns) {
-          const columnNames = csvValueInfo.columns.map((col: any) => col.name).join(', ');
-          const columnInfo = generateColumnInfoString(csvValueInfo.columns, (csvValueInfo as any).totalRowCount || 0);
-          
-          context += `\n\n=== CSV DATA ===
-📁 ${csvFileName}
-${summaryText}⚡ Use DuckDB SQL: await query('SELECT...') for all data operations
-
-AVAILABLE COLUMNS: ${columnNames}
-
-${columnInfo}
-
-⚠️ Wait for results before analyzing. DO NOT analyze before executing code.`;
-        } else {
-          // Fallback if valueInfo not available yet
-          context += `\n\n=== CSV DATA ===
-📁 ${csvFileName}
-${summaryText}⚡ Use DuckDB SQL: await query('SELECT...') for all data operations.
-
-⚠️ Wait for results before analyzing. DO NOT analyze before executing code.`;
-        }
-      }
-    } else if (hasCurrentSelectionData && !isFirstMessageWithData) {
-      // Follow-up message - ALWAYS include column info to prevent AI from guessing
-      const selectionInfo = currentSelectionValueInfo || currentSelectionValueInfoToUse;
-      if (selectionInfo && selectionInfo.columns) {
-        const columnNames = selectionInfo.columns.map((col: any) => col.name).join(', ');
-        const columnInfo = generateColumnInfoString(selectionInfo.columns, selectionInfo.totalRowCount || selectionInfo.data?.length || 0);
-        context += `\n\n=== SELECTED DATA (FOLLOW-UP) ===
-AVAILABLE COLUMNS: ${columnNames}
-
-${columnInfo}
-
-⚠️ IMPORTANT: Use ONLY the column names listed above. Do NOT use information_schema (not available in DuckDB-WASM).
-To inspect columns: Object.keys(csvData[0]) or query a sample row.
-
-⚠️ Wait for results before analyzing. DO NOT analyze before executing code.`;
-      } else {
-        context += `\n\n💡 Selected data info was provided in first message (see history). All columns and structure remain available.
-
-⚠️ Wait for results before analyzing. DO NOT analyze before executing code.`;
-      }
-    }
-    
-    // Add CSV data info if available (even without match data)
-    if (csvData && Array.isArray(csvData) && csvData.length > 0 && isFirstMessageWithData) {
-      const actualRowCount = csvData.length;
-      const columnInfo = generateCompactColumnInfo(csvData);
-      const sampleSize = Math.min(1000, actualRowCount);
-      const samplingNote = actualRowCount <= sampleSize 
-        ? `Column details above from all ${actualRowCount.toLocaleString()} rows (complete dataset).`
-        : `Column samples above from first ${sampleSize.toLocaleString()} rows. Query ALL ${actualRowCount.toLocaleString()} rows with query().`;
-      
-      // Get valueInfo summary if available
-      const csvIds = csvId ? (Array.isArray(csvId) ? csvId : [csvId]) : [];
-      const csvValueInfo = csvIds.length > 0 ? getValueInfo(csvIds[0], 'csv', chatId) : null;
-      const summaryText = csvValueInfo?.summary ? `\n\n📋 DATASET SUMMARY:\n${csvValueInfo.summary}\n💡 Use the summary above to understand the data structure.\n` : '';
-      
-      context += `\n\n=== CSV DATA ===
-📁 ${csvFileName || 'CSV File'}
-📊 TOTAL ROWS: ${actualRowCount.toLocaleString()} (all loaded in memory)
-${summaryText}⚡ Use JavaScript code or DuckDB SQL: await query('SELECT...')
-
-COLUMNS (${Object.keys(csvData[0] || {}).length} total):
-${columnInfo}
-
-NOTE: ${samplingNote}
-
-⚠️ Wait for results before analyzing. DO NOT analyze before executing code.`;
-    } else if (csvData && Array.isArray(csvData) && csvData.length > 0 && !isFirstMessageWithData) {
-      // Follow-up message - ALWAYS include column info to prevent AI from guessing
-      const columnInfo = generateCompactColumnInfo(csvData);
-      const columnNames = Object.keys(csvData[0] || {}).join(', ');
-      
-      // Get valueInfo summary if available
-      const csvIds = csvId ? (Array.isArray(csvId) ? csvId : [csvId]) : [];
-      const csvValueInfo = csvIds.length > 0 ? getValueInfo(csvIds[0], 'csv', chatId) : null;
-      const summaryText = csvValueInfo?.summary ? `\n\n📋 DATASET SUMMARY:\n${csvValueInfo.summary}\n💡 Use the summary above to understand the data structure.\n` : '';
-      
-      context += `\n\n=== CSV DATA (FOLLOW-UP) ===
-📁 ${csvFileName || 'CSV File'}
-📊 TOTAL ROWS: ${csvData.length.toLocaleString()}
-${summaryText}AVAILABLE COLUMNS: ${columnNames}
-
-COLUMNS:
-${columnInfo}
-
-⚠️ IMPORTANT: Use ONLY the column names listed above. Do NOT use information_schema (not available in DuckDB-WASM).
-To inspect columns: Object.keys(csvData[0]) or query a sample row.
-
-⚠️ Wait for results before analyzing. DO NOT analyze before executing code.`;
-    }
-    
-    // Load context sections from settings (use selected section if provided)
-    const contextSections = getContextSections(selectedContextSectionId || undefined);
-    context = contextSections + '\n\n' + context;
-    
-    return context;
-  }
+  return context;
 }
 
 // Get CSV file data by ID(s) with optional filtering
@@ -1673,7 +1191,6 @@ export async function getCsvFileData(
       const metadataFiles = await getAllCsvFileMetadata();
       files = metadataFiles;
     } catch (e) {
-      console.warn('Error loading from IndexedDB, trying localStorage:', e);
       // Fallback to localStorage for migration
       const saved = localStorage.getItem("db_csv_files");
       if (saved) {
@@ -1697,13 +1214,11 @@ export async function getCsvFileData(
     if (csvId) {
       // Handle array of CSV IDs
       const csvIds = Array.isArray(csvId) ? csvId : [csvId];
-      DEBUG && console.log('getCsvFileData: Looking for CSV IDs:', csvIds, 'Total files:', files.length);
       
       // Process files in parallel
       const filePromises = csvIds.map(async (id) => {
         const file = files.find((f: any) => f.id === id);
         if (file) {
-          DEBUG && console.log('getCsvFileData: Found file:', file.name, 'id:', file.id);
           
           // ALWAYS try DuckDB first if available (check registered files, not just flags)
             try {
@@ -1713,7 +1228,6 @@ export async function getCsvFileData(
               const tableName = getDuckDBTableName(file.id) || file.tableName;
               
               if (tableName || file.hasDuckDB) {
-                DEBUG && console.log('getCsvFileData: Using DuckDB for efficient querying:', file.name, 'table:', tableName);
                 const rows = await queryCSVWithDuckDB(
                   file.id,
                   filterColumns || null,
@@ -1726,30 +1240,25 @@ export async function getCsvFileData(
                     });
                   } : undefined
                 );
-                DEBUG && console.log('getCsvFileData: DuckDB query returned:', rows?.length || 0, 'rows');
                 return rows || [];
               }
               }
             } catch (duckdbError) {
-              console.warn('getCsvFileData: DuckDB query failed, falling back to standard:', duckdbError);
               // Fall through to standard retrieval
           }
           
           // First check if file has embedded data that needs to be saved
           if (Array.isArray(file.data) && file.data.length > 0) {
-            DEBUG && console.log('getCsvFileData: File has embedded data, rows:', file.data.length, 'Attempting to save...');
             try {
               const { saveCsvDataText } = await import("@/lib/csvStorage");
               const { stringifyCsv } = await import("@/lib/csvUtils");
               const headers = file.headers || (file.data[0] ? Object.keys(file.data[0]) : []);
               const csvText = stringifyCsv(headers, file.data);
               await saveCsvDataText(file.id, csvText, file.data);
-              DEBUG && console.log('getCsvFileData: Successfully saved embedded data to IndexedDB');
             } catch (e) {
               console.error('getCsvFileData: Error saving embedded data:', e);
             }
             // Use embedded data directly
-            DEBUG && console.log('getCsvFileData: Using embedded file.data directly, rows:', file.data.length);
             return file.data;
           } else {
             // Try to get data from IndexedDB
@@ -1785,18 +1294,13 @@ export async function getCsvFileData(
               }
             })();
             
-            DEBUG && console.log('getCsvFileData: Retrieved rows for', file.name, ':', rows?.length || 0);
             if (rows && rows.length > 0) {
               return rows;
             } else {
-              console.warn('getCsvFileData: No rows returned for file:', file.name, 'id:', file.id);
-              console.warn('getCsvFileData: File object keys:', Object.keys(file));
-              console.warn('getCsvFileData: File has data property?', 'data' in file, 'Type:', typeof file.data);
               return null;
             }
           }
         } else {
-          console.warn('getCsvFileData: File not found for ID:', id, 'Available IDs:', files.map((f) => f.id));
           return null;
         }
       });
@@ -1808,11 +1312,9 @@ export async function getCsvFileData(
         }
       });
       
-      DEBUG && console.log('getCsvFileData: Total rows collected:', dataToFilter.length);
       if (dataToFilter.length === 0) return null;
       
       // No limit - data is already in browser, use all of it
-      DEBUG && console.log(`getCsvFileData: Using all ${dataToFilter.length.toLocaleString()} rows (no limit for CSV data in browser)`);
     } else {
       // Combine all files if no specific IDs provided
       const filePromises = files.map(async (file) => {
@@ -1831,7 +1333,6 @@ export async function getCsvFileData(
       if (dataToFilter.length === 0) return null;
       
       // No limit - data is already in browser, use all of it
-      DEBUG && console.log(`getCsvFileData: Using all ${dataToFilter.length.toLocaleString()} rows (no limit for CSV data in browser)`);
     }
     
     // If columns are selected for grouping (even without values), return the data grouped
@@ -1998,10 +1499,6 @@ export function getValueInfo(id: string, type: 'match' | 'csv' = 'match', chatId
               
               if (matchingFile && info.name && matchingFile.name) {
                 if (info.name !== matchingFile.name) {
-                  console.warn(`⚠️ VALUE INFO MISMATCH (case-insensitive):
-  Requested CSV: "${matchingFile.name}" (ID: ${id})
-  But found value info for: "${info.name}" (ID: ${info.id})
-  Rejecting mismatched value info.`);
                   info = null;
                 }
               }
@@ -2053,7 +1550,6 @@ export function getValueInfosByType(type: 'match' | 'csv'): ValueInfo[] {
 export function saveValueInfo(valueInfo: ValueInfo, chatId?: string): void {
   try {
     if (!valueInfo || !valueInfo.id || !valueInfo.type) {
-      console.warn("Invalid valueInfo structure:", valueInfo);
       return;
     }
     
@@ -2218,7 +1714,6 @@ export function saveValueInfo(valueInfo: ValueInfo, chatId?: string): void {
           return !isOld; // Keep active infos
         });
         localStorage.setItem("db_value_infos", JSON.stringify(keptInfos));
-        DEBUG && console.log("✅ Freed up space by removing", oldInfos.length, "unused value infos");
       } catch (retryError) {
         console.error("❌ Failed to save even after cleanup. Storage critically full.");
         throw new Error("Storage quota exceeded. Please clear some data.");
@@ -2283,7 +1778,6 @@ export function removeDuplicateValueInfos(infos?: ValueInfo[]): void {
           });
           existing.usedByChats = mergedChats;
         }
-        DEBUG && console.log(`🗑️ Removing duplicate Value Info: ${info.id} (${info.type}) - keeping entry at index ${existingIndex}`);
       } else if (uniqueKey && seen.has(uniqueKey)) {
         // Duplicate by uniqueId
         toRemove.push(i);
@@ -2298,7 +1792,6 @@ export function removeDuplicateValueInfos(infos?: ValueInfo[]): void {
           });
           existing.usedByChats = mergedChats;
         }
-        DEBUG && console.log(`🗑️ Removing duplicate Value Info by uniqueId: ${info.id} (${info.type}) - keeping entry at index ${existingIndex}`);
       } else {
         // First time seeing this - mark it
         seen.set(criteriaKey, i);
@@ -2574,17 +2067,11 @@ export function autoInspectData(
     summary += `NOTE: This is a SUMMARY, not actual data - write code to analyze specifics. Unique values show sample only (max 20 per column).\n\n`;
   }
 
-  // Add compact column details (type, unique count, 5 samples, nulls)
+  // Add compact column details (type and unique count only - no samples to save tokens)
   summary += columns.map((c: any) => {
-    const samples = c.uniqueValues && Array.isArray(c.uniqueValues) && c.uniqueValues.length > 0
-      ? c.uniqueValues.slice(0, 5).map((v: any) => {
-          const str = String(v == null ? 'null' : v);
-          return str.length > 20 ? str.substring(0, 17) + '...' : str;
-        }).join(', ')
-      : '';
     const uniqueCount = c.uniqueValues?.length || 0;
     const nullPart = c.nullCount > 0 ? `, ${c.nullCount} null` : '';
-    return `${c.name} (${c.type}, ~${uniqueCount}+ unique${nullPart}): ${samples}${uniqueCount > 5 ? '...' : ''}`;
+    return `${c.name} (${c.type}, ~${uniqueCount}+ unique${nullPart})`;
   }).join('\n');
 
   valueInfo.summary = summary;
@@ -2690,10 +2177,6 @@ export async function sendChatMessage(
             csvIds.some(id => currentSelection!.referencedValueInfoId === id)) {
           hasCurrentSelectionForCsv = true;
           currentSelectionData = getCurrentSelectionData(currentSelection);
-          DEBUG && console.log('✅ Found current_selection for CSV:', currentSelection.referencedValueInfoId);
-        } else if (currentSelection) {
-          console.warn('⚠️ current_selection exists but is for a different CSV file:', 
-                      currentSelection.referencedValueInfoId, 'requested:', csvIds);
         }
       }
 
@@ -2708,17 +2191,13 @@ export async function sendChatMessage(
         if (hasCurrentSelectionForCsv && currentSelectionData && Array.isArray(currentSelectionData) && currentSelectionData.length > 0) {
           // Use existing current_selection data if available and valid
           csvData = currentSelectionData;
-          DEBUG && console.log('✅ Using existing current_selection data:', csvData.length, 'rows');
         } else if (hasMatchingSelection && hasValueInfo) {
           // ValueInfo already exists for this filtered selection - skip loading
           // DuckDB will handle queries on-demand
-          DEBUG && console.log('✅ ValueInfo already exists for filtered selection - skipping data load (DuckDB will query on-demand)');
           csvData = null; // DuckDB will handle queries
         } else {
           // Load CSV data with filtering - this will create filtered data and valueInfo
-          DEBUG && console.log('🔄 Loading filtered CSV data with filters:', csvFilterColumns, csvFilterValues);
           csvData = await loadCsvDataWithValueInfo(csvId, csvFilterColumns, csvFilterValues, chatId, onCsvProgress);
-          DEBUG && console.log('✅ Loaded filtered CSV data:', csvData?.length || 0, 'rows');
         }
       } else if (csvId && !hasCsvFiltersSet) {
         // CRITICAL FIX: When CSV ID is provided but no filters, we still need data for execution
@@ -2726,7 +2205,6 @@ export async function sendChatMessage(
         // Set csvData to empty array as signal that CSV exists (executor will load actual data)
         // But ONLY if valueInfo exists - if no valueInfo, don't load yet
         if (hasValueInfo) {
-          DEBUG && console.log('CSV ID provided without filters, but valueInfo exists - executor will load from DuckDB');
           csvData = null; // Executor will load from DuckDB using csvId
         } else {
           // No valueInfo yet - don't attempt to load
@@ -2764,7 +2242,6 @@ export async function sendChatMessage(
   This prevents sending wrong column data (like PGN) to AI.`);
           currentSelectionValueInfo = null; // Reject mismatched current_selection
         } else {
-          DEBUG && console.log('✅ Validated current_selection matches CSV file:', csvFileName);
         }
       }
 
@@ -2789,7 +2266,6 @@ export async function sendChatMessage(
         if (selectionData) {
           dataForExecution = selectionData;
           useCurrentSelection = true;
-          DEBUG && console.log('✅ Using current_selection data for execution:', selectionData.length, 'rows');
         } else if (currentSelectionValueInfo.filterColumns && currentSelectionValueInfo.filterValues) {
           // Value Info exists but data not in memory - re-query using stored filter criteria
           try {
@@ -2823,7 +2299,6 @@ export async function sendChatMessage(
                 try {
                   rowCount = await getRowCount(tableName, whereConditions);
                 } catch (err) {
-                  console.warn('Error fetching row count, proceeding without limit:', err);
                   rowCount = 0;
                 }
                 
@@ -2846,7 +2321,6 @@ export async function sendChatMessage(
                   }
                 
                 // Log actual rows returned for monitoring
-                DEBUG && console.log(`Query returned ${rawRows.length} rows (total matching: ${rowCount})`);
                 
                 if (rawRows && rawRows.length > 0) {
                   // Add data to Value Info in memory only (not saved)
@@ -2858,7 +2332,6 @@ export async function sendChatMessage(
                   currentSelectionValueInfo.isLimited = false;
                   dataForExecution = rawRows;
                   useCurrentSelection = true;
-                  DEBUG && console.log('✅ Re-queried current_selection data:', rawRows.length, 'rows', rowCount > 0 ? `(of ${rowCount.toLocaleString()} total)` : '');
                 }
               }
             }
@@ -2916,7 +2389,6 @@ export async function sendChatMessage(
               try {
                 rowCount = await getRowCount(tableName, whereConditions);
               } catch (err) {
-                console.warn('Error fetching row count, proceeding:', err);
                 rowCount = 0;
               }
               
@@ -2925,7 +2397,6 @@ export async function sendChatMessage(
               const quotedTable = `"${tableName.replace(/"/g, '""')}"`;
               const query = `SELECT * FROM ${quotedTable} WHERE ${whereConditions.join(' AND ')}`;
               
-              DEBUG && console.log('sendChatMessage: Querying data with filters (no limit):', query);
               
               // Execute query via API
               let rawRows: any[] = [];
@@ -2940,7 +2411,6 @@ export async function sendChatMessage(
                   throw err;
                 }
               
-              DEBUG && console.log('sendChatMessage: Queried', rawRows.length, 'rows', rowCount > 0 ? `(of ${rowCount.toLocaleString()} total matching)` : '');
               
               if (rawRows && rawRows.length > 0) {
                 // Generate Value Info for this selection
@@ -2992,17 +2462,11 @@ export async function sendChatMessage(
                     let summary = `Dataset: ${totalRows.toLocaleString()} rows${rowCount > 0 && rowCount !== totalRows ? ` (of ${rowCount.toLocaleString()} total)` : ''}, ${columns.length} columns.\n`;
                     summary += `NOTE: Unique counts below are from SAMPLE (max 20 shown per column), NOT total unique values in dataset.\n\n`;
                     
-                    // Add compact column details (type, unique count, 5 samples, nulls)
+                    // Add compact column details (type and unique count only - no samples to save tokens)
                     summary += columns.map((c: any) => {
-                      const samples = c.uniqueValues && Array.isArray(c.uniqueValues) && c.uniqueValues.length > 0
-                        ? c.uniqueValues.slice(0, 5).map((v: any) => {
-                            const str = String(v == null ? 'null' : v);
-                            return str.length > 20 ? str.substring(0, 17) + '...' : str;
-                          }).join(', ')
-                        : '';
                       const uniqueCount = c.uniqueValues?.length || 0;
                       const nullPart = c.nullCount > 0 ? `, ${c.nullCount} null` : '';
-                      return `${c.name} (${c.type}, ~${uniqueCount}+ unique${nullPart}): ${samples}${uniqueCount > 5 ? '...' : ''}`;
+                      return `${c.name} (${c.type}, ~${uniqueCount}+ unique${nullPart})`;
                     }).join('\n');
                     
                     valueInfo.summary = summary;
@@ -3029,7 +2493,6 @@ export async function sendChatMessage(
                   };
                   dataForExecution = rawRows;
                   useCurrentSelection = true;
-                  DEBUG && console.log('✅ Created and using current_selection data:', rawRows.length, 'rows');
                 }
               }
             }
@@ -3042,7 +2505,6 @@ export async function sendChatMessage(
         // Fallback to matchData if no current_selection
       if (!dataForExecution && matchData && matchData.data && Array.isArray(matchData.data) && matchData.data.length > 0) {
         dataForExecution = matchData.data;
-        DEBUG && console.log('Using matchData for execution:', dataForExecution.length, 'rows');
       }
       
       // Pass data directly to CodeExecutor - it can work with just the data array
@@ -3055,17 +2517,6 @@ export async function sendChatMessage(
       
       let filterCols = csvFiltersExist ? csvFilterColumns : (useCurrentSelection && currentSelectionValueInfo ? currentSelectionValueInfo.filterColumns : (matchFiltersExist ? matchFilterColumns : null));
       let filterVals = csvFiltersExist ? csvFilterValues : (useCurrentSelection && currentSelectionValueInfo ? currentSelectionValueInfo.filterValues : (matchFiltersExist ? matchFilterValues : null));
-      
-      DEBUG && console.log('🔍 Filter selection:', { 
-        csvFiltersExist, 
-        matchFiltersExist, 
-        csvFilterColumns, 
-        csvFilterValues, 
-        matchFilterColumns, 
-        matchFilterValues,
-        filterCols,
-        filterVals
-      });
       
       // SQL is available ONLY for database data (matchData or current_selection from remote Neon DB via Cloudflare Workers)
       // NOT for CSV files - CSV files use JavaScript code execution with DuckDB for efficient data retrieval
@@ -3084,15 +2535,10 @@ export async function sendChatMessage(
       if (hasCsvFilterSelections && csvData && Array.isArray(csvData) && csvData.length > 0) {
         // CSV filters are set - use CSV data directly (ALL data, no sampling)
         executionData = csvData;
-        DEBUG && console.log('✅ Using ALL CSV data for execution (CSV filters set):', csvData.length, 'rows (no limits)');
-        DEBUG && console.log('✅ CSV data sample row:', csvData[0] ? Object.keys(csvData[0]) : 'no sample');
       } else if (!executionData && csvData && Array.isArray(csvData) && csvData.length > 0) {
         // Use CSV data if no matchData or current_selection (fallback) - ALL data, no sampling
         executionData = csvData;
-        DEBUG && console.log('✅ Using ALL CSV data for execution (fallback):', csvData.length, 'rows (no limits)');
-        DEBUG && console.log('✅ CSV data sample row:', csvData[0] ? Object.keys(csvData[0]) : 'no sample');
       } else if (csvData && Array.isArray(csvData) && csvData.length > 0) {
-        DEBUG && console.log('⚠️ CSV data available but not used for execution (using other data source):', csvData.length, 'rows');
       } else if (csvId && (!csvData || csvData.length === 0)) {
         // CRITICAL: Don't load blob if value info exists - use DuckDB for execution instead
         // Value info indicates data is available, just not in memory
@@ -3105,7 +2551,6 @@ export async function sendChatMessage(
         });
         
         if (hasAnyValueInfo || hasCurrentSelectionForCsv) {
-          DEBUG && console.log('sendChatMessage: Value info or current_selection exists, skipping blob load for execution - will use DuckDB or current_selection data');
           // Don't load - execution will use DuckDB or current_selection data
           // executionData will be set from dataForExecution or current_selection later
           // If executionData is still null after all checks, CodeExecutor will handle it via DuckDB
@@ -3114,31 +2559,25 @@ export async function sendChatMessage(
           try {
             const { isDuckDBInitialized, isFileRegisteredInDuckDB } = await import("@/lib/duckdb");
             if (isDuckDBInitialized() && csvIds.some(id => isFileRegisteredInDuckDB(id))) {
-              DEBUG && console.log('sendChatMessage: DuckDB available for CSV, skipping blob load - CodeExecutor will use DuckDB');
               // Don't load blob, but ensure executionData is set from csvData if available
               // CodeExecutor will use DuckDB for queries, but csvData is still needed for context
               if (csvData && Array.isArray(csvData) && csvData.length > 0) {
                 executionData = csvData;
-                DEBUG && console.log('sendChatMessage: Using loaded CSV data for execution context:', csvData.length, 'rows');
               }
             } else {
               // For large datasets that were cleared from memory, try to load data
               // NO LIMITS - Load ALL data (user requested no capping)
-              DEBUG && console.log('⚠️ CSV ID provided but data not in memory and DuckDB not available - attempting to load ALL data for execution:', csvId);
               try {
                 // Load data - DuckDB will return all rows, no sampling
                 const loadedData = await getCsvFileData(csvId, csvFilterColumns, csvFilterValues, undefined);
                 if (loadedData && Array.isArray(loadedData) && loadedData.length > 0) {
                   // Use ALL data - no sampling, no limits
                   executionData = loadedData;
-                  DEBUG && console.log('✅ Loaded ALL CSV data for execution:', executionData.length, 'rows (no limits)');
                 }
               } catch (e) {
-                console.warn('Failed to load CSV data:', e);
               }
             }
           } catch (e) {
-            console.warn('Error checking DuckDB availability:', e);
           }
         }
       }
@@ -3171,10 +2610,7 @@ export async function sendChatMessage(
       // The filters (filterCols/filterVals) will be passed separately and applied by DuckDB
       const csvIdForExecutor = csvId;
       if (csvIdForExecutor && filterCols && filterCols.length > 0) {
-        DEBUG && console.log('✅ Passing csvId WITH filters to executor - DuckDB will apply filters in queries');
-        DEBUG && console.log('   Filters:', filterCols, '=', filterVals);
       } else if (csvIdForExecutor) {
-        DEBUG && console.log('✅ Passing csvId without filters to executor - full dataset access');
       }
       // CRITICAL: Create executor ONCE and reuse for all blocks in this response chain
       // This preserves executionState (including 'result' variable) across blocks within the SAME AI exchange
@@ -3186,23 +2622,15 @@ export async function sendChatMessage(
       if (hasCsvFilterSelections && csvData && Array.isArray(csvData) && csvData.length > 0) {
         // Expose csvData in the execution environment
         (executor as any).csvData = csvData;
-        DEBUG && console.log('✅ Exposed csvData in execution environment:', csvData.length, 'rows');
       }
       
       // Log what data is being used for execution
       if (useCurrentSelection && dataForExecution) {
-        DEBUG && console.log('✅ Using current_selection data:', dataForExecution.length, 'rows');
-        DEBUG && console.log('✅ Sample data structure:', dataForExecution[0] ? Object.keys(dataForExecution[0]) : 'No data');
       } else if (matchData && matchData.data) {
-        DEBUG && console.log('✅ Using matchData:', matchData.data.length, 'rows');
       } else if (csvData && Array.isArray(csvData) && csvData.length > 0) {
-        DEBUG && console.log('✅ Using CSV data:', csvData.length, 'rows');
-        DEBUG && console.log('✅ Sample CSV data structure:', csvData[0] ? Object.keys(csvData[0]) : 'No data');
       } else if (csvIdForExecutor) {
         // Data is available via DuckDB even if not in memory
-        DEBUG && console.log('✅ Data available via DuckDB (csvId:', csvIdForExecutor, ') - use await query() to access');
       } else {
-        console.warn('⚠️ No data available for code execution');
       }
       let assistantResponse = '';
       
@@ -3246,7 +2674,6 @@ export async function sendChatMessage(
             const csvIds = Array.isArray(csvId) ? csvId : [csvId];
             if (csvIds.includes(currentSelection.referencedValueInfoId)) {
               valueInfoForContext = currentSelection;
-              DEBUG && console.log('✅ Using current_selection valueInfo for filtered data:', currentSelection.filterColumns, currentSelection.filterValues);
             }
           }
         }
@@ -3260,7 +2687,6 @@ export async function sendChatMessage(
           if (csvFileValueInfo) {
             if (csvFileValueInfo.name === csvFileName) {
               valueInfoForContext = csvFileValueInfo;
-              DEBUG && console.log('✅ Using validated CSV valueInfo:', csvFileName);
             } else {
               console.error(`❌ VALUE INFO MISMATCH - REJECTED:
   Expected CSV: "${csvFileName}"
@@ -3274,11 +2700,8 @@ export async function sendChatMessage(
           // Log what columns are being sent to AI
           if (valueInfoForContext && valueInfoForContext.columns) {
             const columnNames = valueInfoForContext.columns.map((c: any) => c.name).join(', ');
-            DEBUG && console.log('📋 Columns being sent to AI:', columnNames);
-            DEBUG && console.log('📊 ValueInfo source:', valueInfoForContext.id || 'unknown');
           } else if (csvDataForContext[0]) {
             const columnNames = Object.keys(csvDataForContext[0]).filter(c => c !== '__index').join(', ');
-            DEBUG && console.log('📋 Columns being sent to AI (from data):', columnNames);
           }
           
           if (csvDataForContext.length > LARGE_CONTEXT_THRESHOLD) {
@@ -3286,7 +2709,6 @@ export async function sendChatMessage(
             // Data will be available via DuckDB for code execution
             // hasData = true because csvData exists (even if not passed to context)
             // CRITICAL: Pass csvData as null but ensure valueInfoForContext is passed so hasDataSelected is true
-            DEBUG && console.log(`Large dataset (${csvDataForContext.length.toLocaleString()} rows) - using metadata only for context to prevent lag`);
             // Ensure valueInfoForContext is set so buildVolleyballContext knows data is available
             // Use already validated valueInfoForContext instead of re-fetching
             contextMessage = buildVolleyballContext(message, null, conversationHistory, volleyballContextEnabled, null, csvFileName, valueInfoForContext, selectedContextSectionId, maxFollowupDepth, currentFollowupDepth, isLastFollowup, csvId, chatId);
@@ -3376,7 +2798,6 @@ export async function sendChatMessage(
         contextMessage = buildConversationContext(message, conversationHistory, undefined, volleyballContextEnabled, false, false, selectedContextSectionId, maxFollowupDepth, currentFollowupDepth, isLastFollowup);
       }
       
-      console.log('Sending message to API, model:', model, 'context length:', contextMessage.length);
       
       // Add user message to LangChain memory
       if (chatId) {
@@ -3385,7 +2806,6 @@ export async function sendChatMessage(
           const memoryManager = getOrCreateMemoryManager(chatId);
           await memoryManager.addMessage('user', message);
         } catch (error) {
-          console.warn('Failed to add user message to LangChain memory:', error);
           // Continue even if LangChain fails
         }
       }
@@ -3415,8 +2835,6 @@ export async function sendChatMessage(
             
             // DEBUG: Log if multiple code blocks detected (may indicate AI repeating itself)
             if (blocks.length > 3) {
-              console.warn(`⚠️ AI generated ${blocks.length} code blocks in one response - this may indicate repetition`);
-              console.warn('   Block summary:', blocks.map((b, i) => `${i + 1}: ${b.code.substring(0, 50)}...`).join('\n   '));
             }
             
             // Check for Python code that won't execute - show warning to user
@@ -3433,7 +2851,6 @@ export async function sendChatMessage(
               // Python code detected - show warning (even if some blocks were executed)
               const pythonWarning = `⚠️ **Python code detected - JavaScript only**\n\nThis system only supports JavaScript code execution. Python code (import pandas, import duckdb, df.shape, con.execute, etc.) will NOT execute.\n\n**Use JavaScript instead:**\n\`\`\`execute\n// Count rows\ncsvData.length\n\n// Get columns\nObject.keys(csvData[0])\n\n// Filter data\ncsvData.filter(row => row.column === 'value')\n\n// First 5 rows\ncsvData.slice(0, 5)\n\n// Summary stats\ncsvData.reduce((acc, row) => acc + row.value, 0) / csvData.length\n\`\`\``;
               executionResults.push(pythonWarning);
-              console.warn('⚠️ Python code detected in AI response - showing warning to user');
             }
           
           // Enhanced incomplete detection - check for various patterns
@@ -3463,7 +2880,6 @@ export async function sendChatMessage(
           
           if (looksIncomplete) {
             // Response appears incomplete, wait a bit more and check again
-            DEBUG && console.log('Response looks incomplete, waiting longer...');
                          // Re-detect after waiting
             const updatedBlocks = executor.detectCodeBlocksInStream(assistantResponse);
             blocks.length = 0;
@@ -3471,7 +2887,6 @@ export async function sendChatMessage(
             
             // If still looks incomplete after waiting, log warning
             if (looksIncomplete && assistantResponse.length > 100) {
-              console.warn('⚠️ Response may have been truncated. Consider increasing max_tokens or checking API limits.');
             }
           }
           
@@ -3480,15 +2895,12 @@ export async function sendChatMessage(
             // CRITICAL: Execution should NEVER happen automatically - user MUST explicitly approve
             if (!onCodeExecutionRequest) {
               // No approval callback - cannot execute without user approval
-              DEBUG && console.log('⚠️ No onCodeExecutionRequest callback provided - code execution skipped (requires user approval)');
               onDelta('\n\n*[Code execution requires user approval - click Execute to run]*');
               onDone();
               return;
             }
             
             // Request user approval - this Promise will only resolve when user clicks approve/reject
-            DEBUG && console.log(`🔒 Requesting user approval for ${blocks.length} code block(s)...`);
-            DEBUG && console.log(`🔒 AWAITING user approval - execution will NOT proceed until Promise resolves`);
             let shouldExecute = false;
             let editedBlocks: CodeBlock[] | undefined;
             
@@ -3496,13 +2908,11 @@ export async function sendChatMessage(
               // CRITICAL: This await should block until user clicks approve/reject in dialog
               // Add a timestamp to track when approval was requested
               const approvalRequestTime = Date.now();
-              console.log(`🔒 [${approvalRequestTime}] AWAITING user approval - Promise will NOT resolve until user clicks approve/reject`);
               
               const result = await onCodeExecutionRequest(blocks);
               
               const approvalTime = Date.now();
               const waitTime = approvalTime - approvalRequestTime;
-              console.log(`🔒 [${approvalTime}] Promise resolved after ${waitTime}ms - user ${result.approved ? 'approved' : 'rejected'}`);
               
               // CRITICAL: If Promise resolved too quickly (< 100ms), it might have resolved automatically
               // This should NEVER happen - user needs time to see dialog and click
@@ -3510,10 +2920,8 @@ export async function sendChatMessage(
                 console.error(`🚨 CRITICAL: Promise resolved too quickly (${waitTime}ms) - this suggests auto-approval! Execution will be blocked.`);
                 shouldExecute = false;
               } else {
-                DEBUG && console.log(`🔒 Promise resolved with result:`, result);
                 shouldExecute = result.approved;
                 editedBlocks = result.editedBlocks;
-                DEBUG && console.log(`✅ User approval: ${shouldExecute ? 'approved' : 'rejected'}${editedBlocks ? ' (with edits)' : ''}`);
               }
             } catch (error) {
               console.error('❌ Error requesting code execution approval:', error);
@@ -3522,7 +2930,6 @@ export async function sendChatMessage(
             
             if (!shouldExecute) {
               // User rejected code execution
-              DEBUG && console.log('⛔ Code execution cancelled by user');
               onDelta('\n\n*[Code execution cancelled by user]*');
               onDone();
               return;
@@ -3537,8 +2944,6 @@ export async function sendChatMessage(
               return;
             }
             
-            DEBUG && console.log(`🚀 User approved execution - proceeding with ${blocks.length} block(s)...`);
-            console.log(`🚀 EXECUTION STARTING - User has explicitly approved via dialog`);
             
             // Use edited blocks if provided, otherwise use original blocks
             let blocksToExecute = editedBlocks || blocks;
@@ -3558,22 +2963,17 @@ export async function sendChatMessage(
                 seenBlockHashes.add(codeHash);
                 uniqueBlocks.push(block);
               } else {
-                console.warn(`⚠️ DUPLICATE BLOCK DETECTED BEFORE EXECUTION - SKIPPING block ${idx + 1}:`, codeHash.substring(0, 100) + '...');
               }
             });
             
             if (uniqueBlocks.length !== blocksToExecute.length) {
-              console.warn(`⚠️ Removed ${blocksToExecute.length - uniqueBlocks.length} duplicate block(s) before execution`);
-              console.warn(`   Original: ${blocksToExecute.length} blocks → Unique: ${uniqueBlocks.length} blocks`);
             }
             
             blocksToExecute = uniqueBlocks;
             
             if (editedBlocks) {
-              DEBUG && console.log('📝 Executing user-edited code');
             }
             
-            console.log(`📊 Final blocks to execute: ${blocksToExecute.length} unique block(s)`);
             
             // User approved - proceed with execution
             const codeRanges: Array<{ start: number, end: number }> = [];
@@ -3586,7 +2986,6 @@ export async function sendChatMessage(
             const textAfterCode = assistantResponse.substring(lastCodeEnd).trim();
             
             if (textAfterCode.length > 50) {
-              console.warn(`⚠️ AI included ${textAfterCode.length} characters of text after code blocks. This should not happen - check prompts.`);
             }
             
             // Execute all code blocks and collect results
@@ -3604,7 +3003,6 @@ export async function sendChatMessage(
             // CRITICAL: Continue executing all blocks even if previous ones fail
             // Blocks that fail after a previous error will be marked as "skipped" (orange)
             // Blocks that fail without a previous error will be marked as "failed" (red)
-            DEBUG && console.log(`🔄 Executing ${blocksToExecute.length} code block(s) sequentially...`);
             let hasPreviousError = false; // Track if any previous block failed
             
             for (let i = 0; i < blocksToExecute.length; i++) {
@@ -3614,11 +3012,7 @@ export async function sendChatMessage(
               if (validation.valid) {
                 try {
                   // AWAIT ensures this completes before moving to next block
-                  console.log(`🔍 DEBUG: Executing block ${i + 1}/${blocksToExecute.length}`);
-                  console.log(`🚀 Executing block ${i + 1}/${blocksToExecute.length} - BEFORE execution`);
                   const result = await executor.executeCode(block.code);
-                  console.log(`🔍 DEBUG: Block ${i + 1} complete - success:`, result.success, 'error:', result.error?.substring(0,100));
-                  console.log(`✅ Block ${i + 1}/${blocksToExecute.length} execution completed - success: ${result.success}`);
                   
                   // CRITICAL: If block failed and there was a previous error, mark as "skipped" (orange)
                   // If block failed but no previous error, mark as regular error (red)
@@ -3632,20 +3026,14 @@ export async function sendChatMessage(
                       // Previous block failed - mark this as "skipped" (orange)
                       errorMessage = `Skipped: Previous block failed, this block also failed: ${result.error}`;
                       isSkipped = true;
-                      console.log(`🔍 DEBUG: Block ${i + 1} marked as SKIPPED (orange)`);
-                      console.log(`⚠️ Block ${i + 1} failed after previous error - marking as skipped (orange)`);
                     } else {
                       // First failure - mark as regular error (red)
                       errorMessage = result.error;
                       hasPreviousError = true; // Set flag for subsequent blocks
-                      console.log(`🔍 DEBUG: Block ${i + 1} marked as FAILED (red)`);
-                      console.log(`❌ Block ${i + 1} failed - marking as failed (red)`);
                     }
                   } else if (result.success) {
                     // Success - clear the error flag so next failure is treated as new error (red)
                     hasPreviousError = false;
-                    console.log(`🔍 DEBUG: Block ${i + 1} marked as SUCCESS (green)`);
-                    console.log(`✅ Block ${i + 1} succeeded - clearing error flag`);
                   }
                   
                   // Format result with appropriate error message
@@ -3656,8 +3044,6 @@ export async function sendChatMessage(
                   };
                   
                   const formattedResult = executor.formatResult(resultToFormat);
-                  console.log(`🔍 DEBUG: Block ${i + 1} formatted result (first 200 chars):`, formattedResult.substring(0, 200));
-                  console.log(`🔍 DEBUG: Block ${i + 1} success=${result.success}, has error="${errorMessage || result.error}"`);
                   executionResults.push(formattedResult);
 
                   // CRITICAL FIX: Set error field if execution failed (e.g., DuckDB query errors)
@@ -3672,7 +3058,6 @@ export async function sendChatMessage(
                     if (Array.isArray(resultToStore) && resultToStore.length > 100) {
                       // Truncate to first 100 rows for large datasets
                       resultToStore = resultToStore.slice(0, 100);
-                      console.warn(`⚠️ Truncated execution result from ${result.result.length} to 100 rows to prevent context overflow`);
                     }
                     rawExecutionResults.push(resultToStore);
                   } else {
@@ -3681,7 +3066,6 @@ export async function sendChatMessage(
 
                   // DON'T send results via onDelta during execution - collect them first
                   // Results will be inserted into assistantResponse in the correct order after all blocks execute
-                  console.log(`🔍 DEBUG: Block ${i + 1} result collected (will be inserted after all blocks complete)`);
                 } catch (error) {
                   // Exception during execution
                   let errorMessage = error instanceof Error ? error.message : 'Unknown error';
@@ -3691,10 +3075,8 @@ export async function sendChatMessage(
                   if (hasPreviousError) {
                     errorMessage = `Skipped: Previous block failed, this block threw exception: ${errorMessage}`;
                     isSkipped = true;
-                    console.log(`⚠️ Block ${i + 1} threw exception after previous error - marking as skipped (orange)`);
                   } else {
                     hasPreviousError = true; // Set flag for subsequent blocks
-                    console.log(`❌ Block ${i + 1} threw exception - marking as failed (red)`);
                   }
                   
                   const errorResult = executor.formatResult({
@@ -3712,7 +3094,6 @@ export async function sendChatMessage(
                   rawExecutionResults.push(null);
 
                   // DON'T send error via onDelta during execution - will be inserted after all blocks complete
-                  console.log(`🔍 DEBUG: Block ${i + 1} error collected (will be inserted after all blocks complete)`);
                 }
               } else if (validation.needsCompletion) {
                 // Mark as needing completion - will be fixed in second pass
@@ -3721,7 +3102,6 @@ export async function sendChatMessage(
                 rawExecutionResults.push(null);
 
                 // Warning will be shown after all blocks complete
-                console.log(`🔍 DEBUG: Block ${i + 1} marked as incomplete`);
               } else {
                 // Invalid code
                 const errorResult = executor.formatResult({
@@ -3739,27 +3119,19 @@ export async function sendChatMessage(
                 rawExecutionResults.push(null);
 
                 // Error will be shown after all blocks complete
-                console.log(`🔍 DEBUG: Block ${i + 1} validation failed`);
               }
             }
             
-            DEBUG && console.log(`✅ First pass complete: ${executionStatus.length}/${blocksToExecute.length} blocks processed`);
-            console.log(`🔍 DEBUG: All blocks executed, now sending results to UI in order`);
             
             // CRITICAL: Send execution results to UI via onDelta in execution order
             // onDelta will append them to assistantResponse AND send to UI
             // This ensures results appear in the order they were executed
-            console.log(`🔍 EXECUTION COMPLETE: Sending ${executionResults.length} results to UI`);
             for (let i = 0; i < executionResults.length; i++) {
               if (executionResults[i]) {
-                console.log(`📤 Sending result ${i + 1} to UI (length: ${executionResults[i].length})`);
-                console.log(`📤 Result ${i + 1} preview:`, executionResults[i].substring(0, 150));
                 onDelta(`\n\n${executionResults[i]}`);
               } else {
-                console.warn(`⚠️ Skipping empty result ${i + 1}`);
               }
             }
-            console.log(`🔍 EXECUTION COMPLETE: All results sent to UI, now checking if follow-up should be sent...`);
             
             // Check if all blocks are now successful
             // CRITICAL: Check both result.success AND that result is not null
@@ -3778,22 +3150,6 @@ export async function sendChatMessage(
             const hasExecutionResults = executionResults.length > 0;
             const hasRawResults = rawExecutionResults.length > 0;
             
-            // Debug logging to understand why follow-up might not trigger
-            DEBUG && console.log('Execution status check:', {
-              allSuccessful,
-              hasErrors,
-              hasExecutionResults,
-              hasRawResults,
-              executionResultsLength: executionResults.length,
-              rawExecutionResultsLength: rawExecutionResults.length,
-              executionStatus: executionStatus.map(s => ({ 
-                hasResult: s.result !== null, 
-                success: s.result?.success, 
-                hasError: !!s.error,
-                error: s.error 
-              }))
-            });
-            
             // CRITICAL: Send follow-up for BOTH success and mixed success/error cases
             // Only use error fix path if ALL blocks failed
             // If some succeeded, send normal follow-up with successful results + error info
@@ -3805,7 +3161,6 @@ export async function sendChatMessage(
             const allFailed = hasErrors && !hasSuccessfulBlocks;
             
             if (!hasErrors && allSuccessful && hasExecutionResults && hasRawResults) {
-              console.log('✅ FOLLOW-UP CHECK: All code blocks executed successfully - will send follow-up with results');
               
               // Reset consecutive failure count on successful execution
               if (chatId) {
@@ -3816,56 +3171,45 @@ export async function sendChatMessage(
               followUpDepth = currentFollowupDepth + 1;
               isFollowUpLast = maxFollowupDepth > 0 && followUpDepth >= maxFollowupDepth;
 
-              console.log(`🔍 FOLLOW-UP CHECK: maxFollowupDepth=${maxFollowupDepth}, currentFollowupDepth=${currentFollowupDepth}, nextDepth=${followUpDepth}`);
 
               // If maxFollowupDepth is set and we've reached it, don't send followup
               if (maxFollowupDepth > 0 && followUpDepth >= maxFollowupDepth) {
-                console.log(`⚠️ BLOCKED: Maximum followup depth (${maxFollowupDepth}) reached, skipping automatic followup`);
                 onDone();
                 return;
               }
 
-              console.log(`🔄 SENDING FOLLOW-UP: Simple follow-up with results (depth ${followUpDepth})...`);
             } else if (hasErrors && hasSuccessfulBlocks) {
               // Mixed case: some succeeded, some failed - send follow-up with successful results + error info
               const successfulCount = executionStatus.filter(s => s.result?.success && !s.error).length;
               const failedCount = executionStatus.filter(s => !s.result?.success || s.error).length;
-              console.log(`⚠️ FOLLOW-UP CHECK: Mixed results - ${successfulCount} succeeded, ${failedCount} failed`);
               
               // If more blocks failed than succeeded, increment failure count
               // Otherwise, reset it (more succeeded or equal)
               if (failedCount > successfulCount) {
                 const failureCount = chatId ? incrementFailureCount(chatId) : 0;
-                console.log(`⚠️ More blocks failed than succeeded - incrementing failure count: ${failureCount}`);
               } else {
                 // More succeeded or equal - reset counter
                 if (chatId) {
                   resetFailureCount(chatId);
                 }
-                console.log(`✅ More blocks succeeded than failed - resetting failure count`);
               }
 
               followUpDepth = currentFollowupDepth + 1;
               isFollowUpLast = maxFollowupDepth > 0 && followUpDepth >= maxFollowupDepth;
 
-              console.log(`🔍 FOLLOW-UP CHECK: maxFollowupDepth=${maxFollowupDepth}, currentFollowupDepth=${currentFollowupDepth}, nextDepth=${followUpDepth}`);
 
               if (maxFollowupDepth > 0 && followUpDepth >= maxFollowupDepth) {
-                console.log(`⚠️ BLOCKED: Maximum followup depth (${maxFollowupDepth}) reached, skipping automatic followup`);
                 onDone();
                 return;
               }
 
-              console.log(`🔄 SENDING FOLLOW-UP: Follow-up with successful results (depth ${followUpDepth})...`);
             }
             
             // Handle error case - only if ALL blocks failed (use error fix path)
             if (allFailed) {
-              DEBUG && console.log(`🔄 Some blocks failed - sending follow-up with successful results and error details...`);
               
               // All blocks failed - increment consecutive failure count
               const failureCount = chatId ? incrementFailureCount(chatId) : 0;
-              console.log(`⚠️ All blocks failed - incrementing failure count: ${failureCount}`);
               
               // For error follow-ups, set depth to 0 (this is an error fix, not a continuation)
               followUpDepth = 0;
@@ -3894,7 +3238,6 @@ export async function sendChatMessage(
               
               // If we've had 4+ consecutive failures, ask clarifying questions instead of trying to fix
               if (failureCount >= 4) {
-                console.log(`🛑 4+ consecutive failures detected - asking user for clarification instead of auto-fixing`);
                 
                 // Collect all errors for context
                 const allErrors = failedExecutions.map(s => {
@@ -4082,7 +3425,6 @@ Do NOT include Block 1 again!`;
               // IMPORTANT: Always allow at least ONE error fix attempt, even if depth limit is reached
               // Only skip if we're already past the first error fix (depth > 1)
               if (maxFollowupDepth > 0 && errorFixDepth > maxFollowupDepth && currentFollowupDepth > 0) {
-                DEBUG && console.log(`⚠️ Maximum followup depth (${maxFollowupDepth}) reached after error fix attempt, skipping additional error fix`);
                 onDone();
                 return;
               }
@@ -4193,25 +3535,21 @@ The error above was likely caused by using a column name that doesn't exist. Che
                     let editedErrorFixBlocks: CodeBlock[] | undefined;
                     
                     if (onCodeExecutionRequest) {
-                      DEBUG && console.log(`🔒 Requesting user approval for ${errorFixBlocks.length} error fix code block(s)...`);
                       try {
                         const result = await onCodeExecutionRequest(errorFixBlocks);
                         shouldExecuteErrorFix = result.approved;
                         editedErrorFixBlocks = result.editedBlocks;
-                        DEBUG && console.log(`✅ User approval for error fix: ${shouldExecuteErrorFix ? 'approved' : 'rejected'}${editedErrorFixBlocks ? ' (with edits)' : ''}`);
                       } catch (error) {
                         console.error('❌ Error requesting error fix code execution approval:', error);
                         shouldExecuteErrorFix = false;
                       }
                     } else {
-                      console.warn('⚠️ No onCodeExecutionRequest callback - error fix code cannot execute without user approval');
                       onDelta('\n\n*[Error fix code execution requires user approval - click Execute to run]*');
                       onDone();
                       return;
                     }
                     
                     if (!shouldExecuteErrorFix) {
-                      DEBUG && console.log('⛔ Error fix code execution cancelled by user');
                       onDelta('\n\n*[Error fix code execution cancelled by user]*');
                       onDone();
                       return;
@@ -4350,7 +3688,6 @@ The results above are from your fixed code. Check if they answer the user's ques
                       const isNextFollowUpLast = maxFollowupDepth > 0 && nextFollowUpDepth >= maxFollowupDepth;
                       
                       if (maxFollowupDepth > 0 && nextFollowUpDepth > maxFollowupDepth) {
-                        DEBUG && console.log('⚠️ Maximum follow-up depth reached after error fix, stopping further follow-ups.');
                         onDone();
                         return;
                       }
@@ -4568,7 +3905,6 @@ The results above contain real data. Use them to answer: "${originalUserMessage}
                     followUpValueInfo = retrievedValueInfo;
                   }
                 }
-                DEBUG && console.log('Follow-up: Value info exists, skipping blob reload - using value info for context');
               }
               
               const hasActualData = (dataForExecution && Array.isArray(dataForExecution) && dataForExecution.length > 0) || 
@@ -4637,7 +3973,6 @@ The results above contain real data. Use them to answer: "${originalUserMessage}
                   }
 
                   if (!followUpExecutionData) {
-                    console.warn('Follow-up executor: No data available - code execution may fail');
                   }
                 }
               }
@@ -4657,7 +3992,6 @@ The results above contain real data. Use them to answer: "${originalUserMessage}
               // CRITICAL FIX: Reuse the SAME executor to preserve executionState
               // This allows 'result' variable from previous blocks to be available
               // Don't create a new executor - reuse the existing one!
-              DEBUG && console.log('✅ Reusing executor for follow-up (preserves executionState with result variable)');
               
               const followUpProcessedHistory = await getConversationHistory(updatedHistory, chatId);
               await callApi({
@@ -4673,14 +4007,12 @@ The results above contain real data. Use them to answer: "${originalUserMessage}
                 },
                 onDone: async () => {
                   try {
-                    DEBUG && console.log('✅ Follow-up message from AI received, checking for code blocks...');
 
                     // Wait a bit to ensure full response is collected
                     
                     
                     // Check if follow-up response contains code execution request
                     const followUpBlocks = executor.detectCodeBlocksInStream(followUpContent);
-                    DEBUG && console.log(`🔍 Follow-up code detection: ${followUpBlocks.length} block(s) found`);
                     
                     // Check for duplicate code blocks and warn user, but don't stop execution
                     const previouslyExecutedCode = new Set<string>();
@@ -4844,7 +4176,6 @@ The results above contain real data. Use them to answer: "${originalUserMessage}
                       ];
                       
                       if (maxFollowupDepth > 0 && nextFollowUpDepth > maxFollowupDepth) {
-                        DEBUG && console.log('⚠️ Maximum follow-up depth reached, stopping');
                         executor.clearExecutionState();
                         onDone();
                         return;
@@ -4914,19 +4245,16 @@ The results above contain real data. Use them to answer: "${originalUserMessage}
 
                       if (!onCodeExecutionRequest) {
                         // CRITICAL: No approval callback - cannot execute without user approval
-                        DEBUG && console.log('⚠️ No onCodeExecutionRequest callback in follow-up - code execution skipped');
                         onDelta('\n\n*[Code execution requires user approval - approval callback missing]*');
                         executor.clearExecutionState();
                         onDone();
                         return;
                       }
 
-                      DEBUG && console.log(`🔒 Requesting user approval for ${followUpBlocks.length} follow-up code block(s)...`);
                       try {
                         const result = await onCodeExecutionRequest(followUpBlocks);
                         shouldExecuteFirstFollowup = result.approved;
                         editedFirstFollowupBlocks = result.editedBlocks;
-                        DEBUG && console.log(`✅ User approval: ${shouldExecuteFirstFollowup ? 'approved' : 'rejected'}${editedFirstFollowupBlocks ? ' (with edits)' : ''}`);
                       } catch (error) {
                         console.error('❌ Error requesting follow-up code execution approval:', error);
                         shouldExecuteFirstFollowup = false;
@@ -4934,7 +4262,6 @@ The results above contain real data. Use them to answer: "${originalUserMessage}
                       
                       if (!shouldExecuteFirstFollowup) {
                         // User rejected follow-up code execution
-                        DEBUG && console.log('⛔ Follow-up code execution cancelled by user');
                         onDelta('\n\n*[Code execution cancelled by user]*');
                         executor.clearExecutionState();
                         onDone();
@@ -4953,7 +4280,6 @@ The results above contain real data. Use them to answer: "${originalUserMessage}
                       // Use edited blocks if provided, otherwise execute ALL blocks (including previously executed ones)
                       const blocksToExecuteFirstFollowup = editedFirstFollowupBlocks || followUpBlocks;
                       
-                      DEBUG && console.log(`🔄 Executing ${blocksToExecuteFirstFollowup.length} code block(s) from follow-up response...`);
                       onDelta('\n\n**Executing additional code from follow-up...**\n\n');
                       
                       for (let i = 0; i < blocksToExecuteFirstFollowup.length; i++) {
@@ -4995,7 +4321,6 @@ The results above contain real data. Use them to answer: "${originalUserMessage}
                     }
                     
                     if (followUpExecutionResults.length > 0) {
-                        DEBUG && console.log('✅ Follow-up code execution completed');
                         
                         // Check if we should create another followup
                         // Error can be: result is null, result.success is false, or error field is set
@@ -5028,7 +4353,6 @@ The results above contain real data. Use them to answer: "${originalUserMessage}
                         }
                         
                         if (atMaxDepth) {
-                          console.warn(`⚠️ Maximum follow-up depth (${maxFollowupDepth}) reached - stopping`);
                           onDone();
                           return;
                         }
@@ -5043,7 +4367,6 @@ The results above contain real data. Use them to answer: "${originalUserMessage}
                         const shouldCreateRecursiveFollowup = hasErrors || followUpHasCodeBlocks;
                         
                         if (!shouldCreateRecursiveFollowup) {
-                          DEBUG && console.log('✅ Follow-up response is analysis only (no code blocks) - task complete, no recursive follow-up needed');
                           executor.clearExecutionState();
                           onDone();
                           return;
@@ -5051,7 +4374,6 @@ The results above contain real data. Use them to answer: "${originalUserMessage}
 
 
                         if (shouldCreateRecursiveFollowup) {
-                          DEBUG && console.log(`🔄 Creating recursive follow-up (hasErrors: ${hasErrors}, allSuccessful: ${allFollowUpSuccessful})...`);
                           
                           // Get the raw execution results data
                           const combinedFollowUpRawResults = followUpRawResults.length === 1 
@@ -5103,18 +4425,15 @@ The results above contain real data. Use them to answer: "${originalUserMessage}
                             let failureCount = 0;
                             if (failedCount > successfulCount) {
                               failureCount = chatId ? incrementFailureCount(chatId) : 0;
-                              console.log(`⚠️ More blocks failed than succeeded (${failedCount} failed blocks, ${successfulCount} succeeded) - incrementing failure count: ${failureCount}`);
                             } else {
                               // More succeeded or equal - reset counter
                               if (chatId) {
                                 resetFailureCount(chatId);
                               }
-                              console.log(`✅ More blocks succeeded than failed (${successfulCount} succeeded, ${failedCount} failed) - resetting failure count`);
                             }
                             
                             // If we've had 4+ consecutive failures, ask clarifying questions instead of trying to fix
                             if (failureCount >= 4) {
-                              console.log(`🛑 4+ consecutive failures detected in follow-up - asking user for clarification instead of auto-fixing`);
                               
                               // Collect all errors for context
                               const allErrors = failedExecutions.map(s => {
@@ -5362,14 +4681,12 @@ The results above contain real data. Use them to answer: "${originalUserMessage}
                           
                           // Check depth limit
                           if (maxFollowupDepth > 0 && nextFollowUpDepth >= maxFollowupDepth) {
-                            DEBUG && console.log('⚠️ Maximum follow-up depth reached, stopping');
                             onDone();
                             return;
                           }
                           
                           // Check if request was aborted before starting nested follow-up
                           if (signal?.aborted) {
-                            DEBUG && console.log('⚠️ Request aborted, skipping recursive follow-up');
                             onDone();
                             return;
                           }
@@ -5390,7 +4707,6 @@ The results above contain real data. Use them to answer: "${originalUserMessage}
                             },
                             onDone: async () => {
                               const nextBlocks = executor.detectCodeBlocksInStream(nextFollowUpContent);
-                              DEBUG && console.log(`🔍 Next follow-up code detection: ${nextBlocks.length} block(s) found`);
                               
                               // CRITICAL FIX: Filter out code blocks that have already been executed successfully
                               // Track all previously executed code from initial execution and first follow-up
@@ -5544,7 +4860,6 @@ Be direct: state what was found, calculated, or returned by the code execution.
                                 const isNextRecursiveLast = maxFollowupDepth > 0 && nextRecursiveDepth >= maxFollowupDepth;
                                 
                                 if (maxFollowupDepth > 0 && nextRecursiveDepth > maxFollowupDepth) {
-                                  DEBUG && console.log('⚠️ Maximum follow-up depth reached, stopping');
                                   executor.clearExecutionState();
                                   onDone();
                                   return;
@@ -5594,18 +4909,15 @@ Be direct: state what was found, calculated, or returned by the code execution.
 
                                 if (!onCodeExecutionRequest) {
                                   // CRITICAL: No approval callback - cannot execute without user approval
-                                  DEBUG && console.log('⚠️ No onCodeExecutionRequest callback in recursive follow-up - code execution skipped');
                                   onDelta('\n\n*[Code execution requires user approval - approval callback missing]*');
                                   onDone();
                                   return;
                                 }
 
-                                DEBUG && console.log(`🔒 Requesting user approval for ${nextBlocks.length} recursive follow-up code block(s)...`);
                                 try {
                                   const result = await onCodeExecutionRequest(nextBlocks);
                                   shouldExecuteFollowup = result.approved;
                                   editedFollowupBlocks = result.editedBlocks;
-                                  DEBUG && console.log(`✅ User approval: ${shouldExecuteFollowup ? 'approved' : 'rejected'}${editedFollowupBlocks ? ' (with edits)' : ''}`);
                                 } catch (error) {
                                   console.error('❌ Error requesting follow-up code execution approval:', error);
                                   shouldExecuteFollowup = false;
@@ -5613,7 +4925,6 @@ Be direct: state what was found, calculated, or returned by the code execution.
                                 
                                 if (!shouldExecuteFollowup) {
                                   // User rejected follow-up code execution
-                                  DEBUG && console.log('⛔ Follow-up code execution cancelled by user');
                                   onDelta('\n\n*[Code execution cancelled by user]*');
                                   onDone();
                                   return;
@@ -5661,12 +4972,10 @@ Be direct: state what was found, calculated, or returned by the code execution.
 
                                 // CRITICAL FIX: Send execution results back to AI for analysis
                                 if (nextExecutionResults.length > 0 && nextRawResults.some(r => r !== null)) {
-                                  DEBUG && console.log('🔄 Sending additional execution results back to AI for final analysis...');
 
                                   // Check depth limit before creating another follow-up
                                   const finalFollowUpDepth = nextFollowUpDepth + 1;
                                   if (maxFollowupDepth > 0 && finalFollowUpDepth >= maxFollowupDepth) {
-                                    DEBUG && console.log('⚠️ Maximum follow-up depth reached after additional code execution, stopping');
                                     onDone();
                                     return;
                                   }
@@ -5712,7 +5021,6 @@ Be direct: state what was found, calculated, or returned by the code execution.
                                       onDelta(chunk);
                                     },
                                     onDone: () => {
-                                      DEBUG && console.log('✅ Final analysis complete');
                                       onDone();
                                     },
                                     onError: (error: string) => {
@@ -5738,7 +5046,6 @@ Be direct: state what was found, calculated, or returned by the code execution.
                           onDone();
                         }
                       } else {
-                        DEBUG && console.log('ℹ️ No code blocks found in follow-up response');
                         executor.clearExecutionState();
                         onDone();
                       }
@@ -5783,7 +5090,6 @@ Be direct: state what was found, calculated, or returned by the code execution.
               
               await memoryManager.addMessage('assistant', content);
             } catch (error) {
-              console.warn('Failed to add assistant message to LangChain memory:', error);
               // Don't fail the request if LangChain update fails
             }
           }

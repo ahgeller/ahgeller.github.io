@@ -7,7 +7,6 @@ const registeredFiles = new Map<string, { file: File | Blob; tableName: string }
 const MAX_REGISTERED_FILES = 10; // Maximum files to keep registered
 
 // Debug flag - set to true to see what's happening
-const DEBUG = false;
 
 /**
  * Timeout wrapper for async operations
@@ -31,7 +30,6 @@ async function hydrateRegisteredFilesFromOPFS(): Promise<void> {
   }
 
   try {
-    DEBUG && console.log('🔄 Hydrating registeredFiles from OPFS DB...');
     
     const conn = await db.connect();
     
@@ -52,7 +50,6 @@ async function hydrateRegisteredFilesFromOPFS(): Promise<void> {
         }).filter((name: string) => name.startsWith('csv_'));
       }
       
-      DEBUG && console.log(`📋 Found ${tableNames.length} csv_ tables in OPFS DB:`, tableNames);
       
       // For each table, extract the file ID and add to registeredFiles
       for (const tableName of tableNames) {
@@ -83,13 +80,10 @@ async function hydrateRegisteredFilesFromOPFS(): Promise<void> {
             file: null as any, // Will be loaded from IndexedDB when needed
             tableName 
           });
-          DEBUG && console.log(`✅ Hydrated table ${tableName} -> file ${fileId} (blob will be loaded on demand)`);
         } else {
-          DEBUG && console.log(`⚠️ Could not find file ID for table ${tableName}`);
         }
       }
       
-      DEBUG && console.log(`✅ Hydration complete: ${registeredFiles.size} files registered`);
       
       // Sync metadata to ensure consistency
       await syncMetadataWithRegisteredFiles();
@@ -98,7 +92,6 @@ async function hydrateRegisteredFilesFromOPFS(): Promise<void> {
       await conn.close();
     }
   } catch (error) {
-    console.warn('Failed to hydrate registeredFiles from OPFS (non-critical):', error);
   }
 }
 
@@ -120,7 +113,6 @@ async function findFileIdForTable(tableName: string): Promise<string | null> {
         }
       }
     } catch (parseError) {
-      console.warn('Failed to parse db_csv_files from localStorage:', parseError);
     }
     
     // Try IndexedDB metadata
@@ -155,7 +147,6 @@ async function findFileIdForTable(tableName: string): Promise<string | null> {
  */
 async function syncMetadataWithRegisteredFiles(): Promise<void> {
   try {
-    DEBUG && console.log('🔄 Syncing metadata with registeredFiles...');
     
     // Update localStorage metadata
     try {
@@ -172,19 +163,16 @@ async function syncMetadataWithRegisteredFiles(): Promise<void> {
                 file.hasDuckDB = true;
                 file.tableName = registered.tableName;
                 updated = true;
-                DEBUG && console.log(`✅ Updated metadata for ${file.name}: tableName=${registered.tableName}`);
               }
             }
           }
           
           if (updated) {
             localStorage.setItem("db_csv_files", JSON.stringify(files));
-            DEBUG && console.log('✅ localStorage metadata updated');
           }
         }
       }
     } catch (parseError) {
-      console.warn('Failed to parse/update localStorage metadata:', parseError);
     }
     
     // Update IndexedDB metadata
@@ -201,17 +189,13 @@ async function syncMetadataWithRegisteredFiles(): Promise<void> {
               hasDuckDB: true,
               tableName: registered.tableName
             });
-            DEBUG && console.log(`✅ Updated IndexedDB metadata for ${file.name}`);
           }
         }
       }
     } catch (e) {
-      DEBUG && console.warn('Could not sync IndexedDB metadata:', e);
     }
     
-    DEBUG && console.log('✅ Metadata sync complete');
   } catch (error) {
-    console.warn('Failed to sync metadata (non-critical):', error);
   }
 }
 
@@ -251,7 +235,6 @@ function manageRegisteredFilesSize(): void {
       const fileId = filesWithAccess[i].key;
       registeredFiles.delete(fileId);
       fileAccessTimes.delete(fileId);
-      console.log(`🗑️ Evicted LRU file from DuckDB: ${fileId}`);
     }
   }
 }
@@ -346,7 +329,6 @@ export async function initDuckDB() {
     const workerURL = '/duckdb-browser-mvp.worker.js';
     const wasmURL = '/duckdb-mvp.wasm';
 
-    console.log('🔧 Initializing DuckDB with local MVP bundle (compatible)...', { workerURL, wasmURL });
 
     // Use AsyncDuckDB - the actual export from the package
     const AsyncDuckDB = duckdbModule.AsyncDuckDB;
@@ -375,7 +357,6 @@ export async function initDuckDB() {
     }
     db = new AsyncDuckDB(logger, worker);
 
-    console.log('📥 Loading DuckDB WASM (18MB)... This may take 10-30 seconds on first load.');
 
     // Instantiate with WASM URL (with 60s timeout for large file)
     try {
@@ -384,7 +365,6 @@ export async function initDuckDB() {
         60000,
         'DuckDB WASM instantiation'
       );
-      console.log('✅ WASM loaded successfully');
     } catch (err) {
       console.error('❌ WASM instantiation failed:', err);
       console.error('Check browser console Network tab - is', wasmURL, 'loading?');
@@ -398,9 +378,7 @@ export async function initDuckDB() {
         10000,
         'DuckDB OPFS open'
       );
-      DEBUG && console.log('🗂️ DuckDB opened with OPFS persistence at opfs:/duckdb/main.db');
     } catch (openErr) {
-      console.warn('DuckDB OPFS open failed, continuing with in-memory DB:', openErr);
     }
 
     // Configure DuckDB for virtual file-based processing
@@ -419,13 +397,10 @@ export async function initDuckDB() {
       // Use multiple threads for parallel query execution
       await conn.query("SET threads=4");
 
-      DEBUG && console.log('✅ DuckDB configured for virtual file-based processing');
       await conn.close();
     } catch (configErr) {
-      console.warn('DuckDB configuration warning (non-critical):', configErr);
     }
 
-    DEBUG && console.log('✅ DuckDB initialized successfully');
 
     initialized = true;
 
@@ -437,7 +412,6 @@ export async function initDuckDB() {
         'OPFS table hydration'
       );
     } catch (hydrateErr) {
-      console.warn('Table hydration timed out or failed (non-critical):', hydrateErr);
     }
     
     return db;
@@ -476,7 +450,6 @@ export function isFileRegisteredInDuckDB(csvId: string): boolean {
 async function ensureFileRegistered(csvId: string, file: File | Blob, tableName?: string): Promise<void> {
   if (!registeredFiles.has(csvId)) {
     const virtualTableName = tableName || `csv_${csvId.replace(/[^a-zA-Z0-9]/g, '_')}`;
-    DEBUG && console.log(`🔄 Auto-registering file ${csvId} in DuckDB (was cleared from memory)`);
     registeredFiles.set(csvId, { file, tableName: virtualTableName });
     manageRegisteredFilesSize();
   }
@@ -509,7 +482,6 @@ export function getDuckDBTableName(csvId: string, deriveIfMissing: boolean = tru
       }
     }
   } catch (parseError) {
-    console.warn('getDuckDBTableName: Failed to parse localStorage:', parseError);
   }
   
   // Last resort: derive table name from file ID if deriveIfMissing is true
@@ -539,7 +511,6 @@ export async function registerFileInDuckDB(
     registeredFiles.set(fileId, { file, tableName: virtualTableName });
     manageRegisteredFilesSize();
     
-    DEBUG && console.log(`✅ File registered in DuckDB: ${fileId} -> ${virtualTableName}`);
     return virtualTableName;
   } catch (error) {
     console.error('❌ Failed to register file in DuckDB:', error);
@@ -558,7 +529,6 @@ export async function safeInitializeDuckDB(): Promise<boolean> {
     await initDuckDB();
     return true;
   } catch (error) {
-    console.warn('DuckDB initialization failed:', error);
     return false;
   }
 }
@@ -618,7 +588,6 @@ export async function processCSVWithDuckDB(
     try {
       const fileSizeMB = file.size / (1024 * 1024);
       const fileSizeGB = file.size / (1024 * 1024 * 1024);
-      DEBUG && console.log(`Processing file with DuckDB: ${fileSizeMB.toFixed(1)}MB (${fileSizeGB.toFixed(2)}GB)`);
 
       onProgress?.({ file: fileName, percent: 5, message: 'Loading file into DuckDB...' });
 
@@ -626,13 +595,11 @@ export async function processCSVWithDuckDB(
       const safeFileName = fileName.replace(/[<>:"|?*\\]/g, '_').replace(/\s+/g, '_');
       
       // PROPER FIX: Use DuckDB's registerFileHandle + insertCSVFromPath for streaming
-      DEBUG && console.log(`📁 Loading CSV with DuckDB native streaming: ${fileSizeMB.toFixed(1)}MB`);
       onProgress?.({ file: fileName, percent: 10, message: `Registering file with DuckDB...` });
       
       try {
         // Register the file handle with DuckDB - this allows DuckDB to read the file without loading it all into memory
         await db.registerFileHandle(safeFileName, file, 2, true); // 2 = BROWSER_FILEREADER protocol
-        DEBUG && console.log(`✅ File registered: ${safeFileName}`);
 
         const escapedCsvFileName = safeFileName.replace(/'/g, "''");
         const escapedTableName = tableName.replace(/"/g, '""');
@@ -645,7 +612,6 @@ export async function processCSVWithDuckDB(
           const parquetFileName = `${cleanFileId}.parquet`;
           const safeParquetName = parquetFileName.replace(/[<>:"|?*\\]/g, '_').replace(/\s+/g, '_');
 
-          DEBUG && console.log(`📦 Converting CSV to Parquet: ${safeFileName} → ${safeParquetName}`);
 
           // Stream CSV directly to Parquet in OPFS (no intermediate table - saves memory!)
           const escapedParquetName = safeParquetName.replace(/'/g, "''");
@@ -657,7 +623,6 @@ export async function processCSVWithDuckDB(
             ) TO '${opfsParquetPath}' (FORMAT PARQUET, COMPRESSION 'ZSTD')
           `);
 
-          DEBUG && console.log(`✅ Parquet file created in OPFS (compressed)`);
           onProgress?.({ file: fileName, percent: 70, message: 'Loading from Parquet...' });
 
           // Now create table from the smaller, compressed Parquet file
@@ -667,11 +632,9 @@ export async function processCSVWithDuckDB(
             SELECT * FROM read_parquet('${opfsParquetPath}')
           `);
 
-          DEBUG && console.log(`✅ Table created from Parquet`);
         } else {
           onProgress?.({ file: fileName, percent: 20, message: 'Loading CSV directly...' });
 
-          DEBUG && console.log(`📄 Creating table directly from CSV (no Parquet conversion)`);
 
           // Create table directly from CSV without Parquet conversion
           await conn.query(`DROP TABLE IF EXISTS "${escapedTableName}"`);
@@ -680,14 +643,12 @@ export async function processCSVWithDuckDB(
             SELECT * FROM read_csv('${escapedCsvFileName}', header=true, auto_detect=true, ignore_errors=true, sample_size=-1)
           `);
 
-          DEBUG && console.log(`✅ Table created directly from CSV`);
         }
 
         onProgress?.({ file: fileName, percent: 90, message: 'Verifying data...' });
 
       } catch (readError: any) {
         console.error('Failed to load CSV with native method:', readError);
-        DEBUG && console.log('Falling back to manual INSERT method...');
 
         // Fallback: Use the manual processCSVWithDuckDBManual function
         await conn.close();
@@ -759,7 +720,6 @@ export async function processCSVWithDuckDB(
     } catch (csvError: any) {
       await conn.close();
       // If native read_csv fails, fall back to manual processing
-      console.warn('DuckDB native read_csv failed, using optimized manual processing:', csvError);
       return processCSVWithDuckDBManual(file, fileId, tableName, onProgress);
     }
   } catch (error) {
@@ -976,7 +936,6 @@ export async function queryCSVWithDuckDB(
       const metadataFiles = await getAllCsvFileMetadata();
       file = metadataFiles.find((f: any) => f.id === csvId);
     } catch (e) {
-      console.warn('Error loading from IndexedDB, trying localStorage:', e);
     }
     
     if (!file) {
@@ -999,10 +958,8 @@ export async function queryCSVWithDuckDB(
       tableName = registered.tableName;
       fileBlob = registered.file;
       markFileAccessed(csvId); // Update LRU tracking
-      DEBUG && console.log(`✅ File ${csvId} already registered in memory`);
     } else if (file.hasDuckDB && file.tableName) {
       // File was registered before but memory was cleared
-      DEBUG && console.log(`🔄 File ${csvId} was registered in DuckDB before, attempting to recover from storage`);
       tableName = file.tableName;
       fileBlob = file.fileBlob || null;
       
@@ -1021,17 +978,14 @@ export async function queryCSVWithDuckDB(
           });
           if (result?.fileBlob) {
             fileBlob = result.fileBlob;
-            DEBUG && console.log(`✅ Retrieved file blob from IndexedDB for ${csvId}`);
           } else if (result?.isBlob) {
             // Blob stored but needs to be loaded
-            DEBUG && console.log(`⚠️ File ${csvId} is stored as blob but needs to be loaded`);
             throw new Error(`File ${file.name || csvId} is stored as blob but not registered in DuckDB. Please re-upload the file to register it in DuckDB. DuckDB is required for all CSV operations.`);
           }
         } catch (e: any) {
           if (e.message && e.message.includes('stored as blob')) {
             throw e; // Re-throw the user-friendly error
           }
-          console.warn('queryCSVWithDuckDB: Could not retrieve file blob from IndexedDB:', e);
         }
       }
       
@@ -1039,7 +993,6 @@ export async function queryCSVWithDuckDB(
       if (fileBlob && tableName) {
         registeredFiles.set(csvId, { file: fileBlob, tableName });
         manageRegisteredFilesSize();
-        DEBUG && console.log(`✅ Re-registered file ${csvId} in memory`);
       }
     }
     
@@ -1062,7 +1015,6 @@ export async function queryCSVWithDuckDB(
         tableName = file.tableName;
       } else {
         // Old/wrong table name - use correct one and it will be updated
-        console.log(`⚠️ Correcting table name: ${file.tableName} → ${correctTableName}`);
         tableName = correctTableName;
       }
     } else if (registeredFiles.has(csvId)) {
@@ -1070,7 +1022,6 @@ export async function queryCSVWithDuckDB(
       if (savedTableName === correctTableName) {
         tableName = savedTableName;
       } else {
-        console.log(`⚠️ Correcting registered table name: ${savedTableName} → ${correctTableName}`);
         tableName = correctTableName;
       }
     } else {
@@ -1087,7 +1038,6 @@ export async function queryCSVWithDuckDB(
       const escapedTableName = tableName.replace(/"/g, '""');
       await conn.query(`SELECT 1 FROM "${escapedTableName}" LIMIT 1`);
       // Table exists! Use it without re-registering
-      console.log(`✅ Table ${tableName} exists in DuckDB OPFS - using existing table`);
       tableExists = true;
       
       // OPTIMIZATION: Update progress to show table is ready (no loading needed)
@@ -1105,14 +1055,12 @@ export async function queryCSVWithDuckDB(
         try {
           const oldEscapedTableName = file.tableName.replace(/"/g, '""');
           await conn.query(`DROP TABLE IF EXISTS "${oldEscapedTableName}"`);
-          console.log(`🗑️ Dropped old table with wrong name: ${file.tableName}`);
         } catch (e) {
           // Ignore - old table might not exist
         }
       }
     } catch (tableCheckError: any) {
       // Table doesn't exist - will need to register/create it
-      console.log(`⚠️ Table ${tableName} does NOT exist in DuckDB - will create it`);
       tableExists = false;
       
       // Try to clean up old wrong table name if it exists
@@ -1120,7 +1068,6 @@ export async function queryCSVWithDuckDB(
         try {
           const oldEscapedTableName = file.tableName.replace(/"/g, '""');
           await conn.query(`DROP TABLE IF EXISTS "${oldEscapedTableName}"`);
-          console.log(`🗑️ Dropped old table with wrong name: ${file.tableName}`);
         } catch (e) {
           // Ignore - old table might not exist
         }
@@ -1133,12 +1080,10 @@ export async function queryCSVWithDuckDB(
       if (!tableName) {
         tableName = correctTableName;
       }
-      console.log(`🔄 Table ${tableName} doesn't exist - will create it from blob`);
       
       // OPTIMIZATION: Only load blob if table doesn't exist (saves memory and time)
       if (!fileBlob) {
         // Try to get blob from IndexedDB
-        console.log(`📦 Loading blob from IndexedDB for file: ${csvId}`);
         try {
           const { initDB } = await import('./csvStorage');
           const dbInstance = await initDB();
@@ -1153,7 +1098,6 @@ export async function queryCSVWithDuckDB(
           if (result?.fileBlob) {
             fileBlob = result.fileBlob;
             const sizeMB = (result.fileBlob.size / (1024 * 1024)).toFixed(1);
-            console.log(`✅ Retrieved file blob from IndexedDB: ${sizeMB}MB`);
           } else {
             console.error(`❌ No fileBlob found in IndexedDB for key: ${storageKey}`, result);
           }
@@ -1168,7 +1112,6 @@ export async function queryCSVWithDuckDB(
         try {
           const escapedOldName = oldWrongName.replace(/"/g, '""');
           await conn.query(`DROP TABLE IF EXISTS "${escapedOldName}"`);
-          console.log(`🧹 Dropped old table with wrong name: ${oldWrongName}`);
         } catch (e) {
           // Ignore - table probably doesn't exist
         }
@@ -1197,7 +1140,6 @@ export async function queryCSVWithDuckDB(
           const fileSizeMB = (fileBlob.size / (1024 * 1024)).toFixed(1);
           const fileSizeGB = (fileBlob.size / (1024 * 1024 * 1024)).toFixed(2);
           
-          console.log(`📊 Creating DuckDB table for ${fileSizeMB}MB file...`);
           onProgress?.({ percent: 5, message: `Loading ${fileSizeMB}MB file into memory...` });
           
           // Load file into memory
@@ -1205,11 +1147,9 @@ export async function queryCSVWithDuckDB(
           onProgress?.({ percent: 15, message: 'Processing file buffer...' });
           
           const uint8Array = new Uint8Array(arrayBuffer);
-          console.log(`✅ File loaded into memory: ${fileSizeMB}MB`);
           
           onProgress?.({ percent: 20, message: 'Registering file with DuckDB...' });
           await (db as any).registerFileBuffer(safeFileName, uint8Array);
-          console.log(`✅ File registered with DuckDB: ${safeFileName}`);
           
           onProgress?.({ percent: 30, message: `Creating persistent table (${fileSizeMB}MB)...` });
           
@@ -1230,15 +1170,12 @@ export async function queryCSVWithDuckDB(
           await conn.query(createTableQuery);
           const createTime = ((Date.now() - createStart) / 1000).toFixed(1);
           
-          console.log(`✅ Table created and persisted in OPFS: ${tableName} (took ${createTime}s)`);
           onProgress?.({ percent: 50, message: `Table created (${createTime}s)` });
           
           // Verify table exists
           try {
             const verifyResult = await conn.query(`SELECT COUNT(*) as cnt FROM "${escapedTableName}" LIMIT 1`);
-            console.log(`✅ Table verified - ready to query`);
           } catch (verifyError) {
-            console.warn(`⚠️ Table verification failed (non-critical):`, verifyError);
           }
         } catch (registerError: any) {
           console.error(`❌ Failed to create table in DuckDB:`, registerError);
@@ -1266,19 +1203,15 @@ export async function queryCSVWithDuckDB(
           fileToUpdate.hasDuckDB = true;
           fileToUpdate.tableName = tableName;
           await saveCsvFileMetadata(fileToUpdate);
-          console.log(`✅ Updated metadata for file ${csvId}: hasDuckDB=true, tableName=${tableName}`);
         } else {
-          console.warn(`⚠️ Could not find file metadata to update for: ${csvId}`);
         }
       } catch (e) {
-        console.warn('⚠️ Failed to update file metadata (non-critical):', e);
       }
       
       // CRITICAL: Update in-memory registry so next query is instant
       registeredFiles.set(csvId, { file: fileBlob, tableName });
       markFileAccessed(csvId);
       manageRegisteredFilesSize();
-      console.log(`✅ File ${csvId} registered in memory with table ${tableName}`);
     }
     
     // At this point, table is guaranteed to exist (either existed before or was just created)
@@ -1463,7 +1396,6 @@ export async function queryCSVWithDuckDB(
           }
         }
       } catch (parseError) {
-        console.warn('queryCSVWithDuckDB: Failed to parse localStorage in fallback:', parseError);
       }
       // Re-throw the fallback error if it's more informative
       if (fallbackError instanceof Error && fallbackError.message.includes('blob')) {
@@ -1538,7 +1470,6 @@ export async function queryParquetDirect(
   // Validate and sanitize limit (prevent DOS attacks with huge limits)
   const safeLimit = Math.max(1, Math.min(limit, 100000));
   if (limit !== safeLimit) {
-    console.warn(`queryParquetDirect: limit ${limit} adjusted to safe limit ${safeLimit}`);
   }
 
   // Validate WHERE clause to prevent SQL injection
@@ -1659,14 +1590,12 @@ export async function executeDuckDBSql(
           fileBlob = loadedBlob;
           registeredFiles.set(csvId, { file: loadedBlob, tableName });
           manageRegisteredFilesSize();
-          DEBUG && console.log(`executeDuckDBSql: Loaded file blob from storage for ${csvId}`);
         } else if (result?.csvText) {
           // File stored as text - create blob from it
           const createdBlob = new Blob([result.csvText], { type: 'text/csv' });
           fileBlob = createdBlob;
           registeredFiles.set(csvId, { file: createdBlob, tableName });
           manageRegisteredFilesSize();
-          DEBUG && console.log(`executeDuckDBSql: Created blob from csvText for ${csvId}`);
         } else if (result?.data && Array.isArray(result.data)) {
           // File stored as data array - convert to CSV and create blob
           const { stringifyCsv } = await import('./csvUtils');
@@ -1676,10 +1605,8 @@ export async function executeDuckDBSql(
           fileBlob = createdBlob;
           registeredFiles.set(csvId, { file: createdBlob, tableName });
           manageRegisteredFilesSize();
-          DEBUG && console.log(`executeDuckDBSql: Created blob from data array for ${csvId}`);
         }
       } catch (e) {
-        console.warn('executeDuckDBSql: Could not retrieve file data from storage:', e);
       }
     }
     
@@ -1698,7 +1625,6 @@ export async function executeDuckDBSql(
       // Table doesn't exist - recreate it if we have fileBlob
       if (fileBlob) {
         const timestamp = new Date().toISOString();
-        console.log(`🔄 [${timestamp}] executeDuckDBSql: Table ${tableName} doesn't exist, recreating from registered file ${csvId}`);
         try {
           const fileName = file.name || `file_${csvId}.csv`;
           const safeFileName = fileName.replace(/[<>:"|?*\\]/g, '_').replace(/\s+/g, '_');
@@ -1707,7 +1633,6 @@ export async function executeDuckDBSql(
           
           // Re-register file
           await (db as any).registerFileBuffer(safeFileName, uint8Array);
-          console.log(`executeDuckDBSql: File re-registered: ${safeFileName}`);
           
           // Test file access
           const testEscapedFileName = safeFileName.replace(/'/g, "''");
@@ -1726,7 +1651,6 @@ export async function executeDuckDBSql(
             SELECT * FROM read_csv('${testEscapedFileName}', header=true, auto_detect=true)
           `;
           await conn.query(createTableQuery);
-          console.log(`executeDuckDBSql: ✅ Table recreated: ${tableName}`);
           
           // Update registered files map
           registeredFiles.set(csvId, { file: fileBlob, tableName });
@@ -1744,7 +1668,6 @@ export async function executeDuckDBSql(
   
     try {
       let finalQuery = sqlQuery.trim();
-      console.log('📝 Original query:', finalQuery);
 
       // Replace common table name placeholders with actual table name
       // AI might use: csvData, data, csv_data, csvdata, CSV_DATA, etc.
@@ -1761,7 +1684,6 @@ export async function executeDuckDBSql(
       finalQuery = finalQuery.replace(/\bUPDATE\s+(csvData|csvdata|CSVDATA|csv_data|CSV_DATA|data|DATA)\b/gi, `UPDATE ${escapedTableName}`);
       finalQuery = finalQuery.replace(/\bTABLE\s+(csvData|csvdata|CSVDATA|csv_data|CSV_DATA|data|DATA)\b/gi, `TABLE ${escapedTableName}`);
       
-      console.log('📝 After table name replacement:', finalQuery);
 
       if (filterColumns && filterColumns.length > 0 && filterValues) {
         const whereConditions: string[] = [];
@@ -1834,7 +1756,6 @@ export async function executeDuckDBSql(
             }
           }
 
-          console.log('🔍 Applied filters to query:', whereConditions);
         }
       } else {
         const hasFrom = /FROM\s+/i.test(finalQuery);
@@ -1843,7 +1764,6 @@ export async function executeDuckDBSql(
         }
       }
       
-      console.log('Executing DuckDB SQL query:', finalQuery);
       
       const result = await conn.query(finalQuery);
       let rows: any[] = [];
@@ -1945,7 +1865,6 @@ export async function executeDuckDBSql(
         throw new Error('DuckDB query did not return an array');
       }
       
-      console.log(`DuckDB SQL query returned ${rows.length} rows`);
       return rows;
     } finally {
       await conn.close();
@@ -2002,14 +1921,12 @@ export async function processParquetWithDuckDB(
 
     try {
       const fileSizeMB = file.size / (1024 * 1024);
-      DEBUG && console.log(`Processing Parquet file: ${fileSizeMB.toFixed(1)}MB`);
 
       onProgress?.({ file: fileName, percent: 10, message: 'Registering file with DuckDB...' });
 
       // Register the file handle
       const safeFileName = fileName.replace(/[<>:"|?*\\]/g, '_').replace(/\s+/g, '_');
       await db.registerFileHandle(safeFileName, file, 2, true);
-      DEBUG && console.log(`✅ Parquet file registered: ${safeFileName}`);
 
       onProgress?.({ file: fileName, percent: 30, message: 'Creating table from Parquet...' });
 
@@ -2023,7 +1940,6 @@ export async function processParquetWithDuckDB(
         SELECT * FROM read_parquet('${escapedFileName}')
       `);
 
-      DEBUG && console.log(`✅ Parquet table created: ${tableName}`);
       onProgress?.({ file: fileName, percent: 90, message: 'Verifying data...' });
 
       // Get row count and headers
@@ -2297,12 +2213,10 @@ export async function closeDuckDB(): Promise<void> {
     try {
       await db.close();
     } catch (error) {
-      console.warn('Error closing DuckDB:', error);
     }
     db = null;
     initialized = false;
     registeredFiles.clear();
-    console.log('DuckDB connection closed');
   }
 }
 
@@ -2338,10 +2252,8 @@ export async function cleanupUnusedDuckDBTables(deletedChatCsvIds: string[]): Pr
     for (const csvId of deletedChatCsvIds) {
       if (!csvIdsStillInUse.has(csvId)) {
         // CSV is no longer used by any chat - clean up its table
-        console.log(`🧹 Cleaning up DuckDB table for unused CSV: ${csvId}`);
         await cleanupDuckDBTable(csvId);
       } else {
-        console.log(`✅ CSV ${csvId} still in use by other chats, keeping table`);
       }
     }
   } catch (error) {
@@ -2373,10 +2285,8 @@ export async function cleanupDuckDBTable(csvId: string): Promise<void> {
       const escapedTableName = tableName.replace(/"/g, '""');
       try {
         await conn.query(`DROP TABLE IF EXISTS "${escapedTableName}"`);
-        console.log(`✅ Dropped DuckDB table: ${tableName}`);
       } catch (dropError: any) {
         // Table might not exist or already dropped - log but don't fail
-        console.warn(`⚠️ Could not drop table ${tableName}:`, dropError?.message);
       }
     } finally {
       await conn.close();
@@ -2384,7 +2294,6 @@ export async function cleanupDuckDBTable(csvId: string): Promise<void> {
 
     // Remove from registered files map
     registeredFiles.delete(csvId);
-    console.log(`✅ Cleaned up DuckDB registration for file: ${csvId}`);
   } catch (error) {
     console.error(`❌ Error cleaning up DuckDB table for ${csvId}:`, error);
     // Still remove from map even if drop fails

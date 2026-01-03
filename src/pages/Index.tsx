@@ -3,8 +3,7 @@ import { generatePrefixedId } from "@/lib/idGenerator";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import ChatSidebar from "@/components/chat/ChatSidebar";
 import ChatMain from "@/components/chat/ChatMain";
-import ApiKeySettings from "@/components/settings/ApiKeySettings";
-import DatabaseSettings from "@/components/settings/DatabaseSettings";
+import Settings from "@/components/settings/Settings";
 import { Chat, Message } from "@/types/chat";
 import { initVolleyballDB } from "@/lib/database";
 import { cleanupUnusedDuckDBTables } from "@/lib/duckdb";
@@ -15,7 +14,7 @@ import { ChartGallery } from "@/components/chat/ChartGallery";
 import { ExportDialog } from "@/components/chat/ExportDialog";
 import { AnalysisTemplates } from "@/components/chat/AnalysisTemplates";
 import { CustomTemplateManager } from "@/components/chat/CustomTemplateManager";
-import { Upload, FileText, Settings, Database, Trash2, BarChart3, Download, Keyboard, Sun, Sparkles, X, Edit } from "lucide-react";
+import { Upload, FileText, Settings as SettingsIcon, Database, Trash2, BarChart3, Download, Keyboard, Sun, Sparkles, X, Edit } from "lucide-react";
 import { useAppStore } from "@/store/useAppStore";
 // Removed framer-motion to improve performance
 // import { motion, AnimatePresence } from "framer-motion";
@@ -27,7 +26,6 @@ const Index = () => {
   // Debug/safety: overlay control and diagnostics
   const closeAllOverlays = () => {
     setShowSettings(false);
-    setShowDatabaseSettings(false);
     setShowExport(false);
     setShowAnalysisTemplates(false);
     setShowCustomTemplates(false);
@@ -36,7 +34,7 @@ const Index = () => {
   };
   const [isAuthenticated, setIsAuthenticated] = useState(false);
   const [showSettings, setShowSettings] = useState(false);
-  const [showDatabaseSettings, setShowDatabaseSettings] = useState(false);
+  const [settingsTab, setSettingsTab] = useState<'api' | 'database'>('api');
   const [isLoading, setIsLoading] = useState(true);
   const [chatsLoaded, setChatsLoaded] = useState(false);
   
@@ -409,6 +407,7 @@ const Index = () => {
       csvDisplayColumns?: string[];
       csvDisplayValues?: Record<string, string | null>;
       selectedCsvIds?: string[];
+      selectedCsvFileNames?: string[];
       selectedContextSectionId?: string | null;
     }
   ) => {
@@ -426,6 +425,7 @@ const Index = () => {
               csvDisplayColumns: filters.csvDisplayColumns,
               csvDisplayValues: filters.csvDisplayValues,
               selectedCsvIds: filters.selectedCsvIds,
+              selectedCsvFileNames: filters.selectedCsvFileNames,
               selectedContextSectionId: filters.selectedContextSectionId,
             }
           : chat
@@ -472,9 +472,12 @@ const Index = () => {
     {
       id: 'settings',
       label: 'API Key Settings',
-      icon: <Settings className="w-4 h-4" />,
+      icon: <SettingsIcon className="w-4 h-4" />,
       keywords: ['settings', 'api', 'key', 'config', 'configure'],
-      action: () => setShowSettings(true),
+      action: () => {
+        setSettingsTab('api');
+        setShowSettings(true);
+      },
       section: 'Settings'
     },
     {
@@ -482,7 +485,10 @@ const Index = () => {
       label: 'Database Settings',
       icon: <Database className="w-4 h-4" />,
       keywords: ['database', 'db', 'connection', 'data', 'settings'],
-      action: () => setShowDatabaseSettings(true),
+      action: () => {
+        setSettingsTab('database');
+        setShowSettings(true);
+      },
       section: 'Settings'
     },
     {
@@ -545,12 +551,13 @@ const Index = () => {
   if (!isAuthenticated && !isLoading) {
     return (
       <div className="flex items-center justify-center h-full bg-chat-bg">
-        <ApiKeySettings 
-          isOpen={true} 
+        <Settings
+          isOpen={true}
           onClose={() => {
             setIsAuthenticated(true);
             // Don't auto-create chat here - let user create it manually
-          }} 
+          }}
+          defaultTab="api"
         />
       </div>
     );
@@ -569,7 +576,6 @@ const Index = () => {
           isOpen={sidebarOpen}
           onToggle={() => setSidebarOpen(!sidebarOpen)}
           onSettings={() => setShowSettings(true)}
-          onDatabaseSettings={() => setShowDatabaseSettings(true)}
         />
 
         <div className="flex-1 flex flex-col overflow-hidden relative">
@@ -622,9 +628,12 @@ const Index = () => {
           />
         </div>
 
-        {/* Settings Dialogs */}
-        <ApiKeySettings isOpen={showSettings} onClose={() => setShowSettings(false)} />
-        <DatabaseSettings isOpen={showDatabaseSettings} onClose={() => setShowDatabaseSettings(false)} />
+        {/* Settings Dialog */}
+        <Settings
+          isOpen={showSettings}
+          onClose={() => setShowSettings(false)}
+          defaultTab={settingsTab}
+        />
 
         {/* New Feature Components */}
         <CommandPalette 

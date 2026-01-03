@@ -17,6 +17,7 @@ import {
 interface ApiKeySettingsProps {
   isOpen: boolean;
   onClose: () => void;
+  contentOnly?: boolean;
 }
 
 interface ModelRowProps {
@@ -145,7 +146,7 @@ const ModelRow = ({ model, onUpdate, onRemove, onSetDefault, isDefault }: ModelR
   );
 };
 
-const ApiKeySettings = ({ isOpen, onClose }: ApiKeySettingsProps) => {
+const ApiKeySettings = ({ isOpen, onClose, contentOnly = false }: ApiKeySettingsProps) => {
   const [apiKeys, setApiKeys] = useState<Record<string, string>>({});
   const [selectedTheme, setSelectedTheme] = useState<ColorScheme>('dark');
   const [customColors, setCustomColorsState] = useState({ primary: '#10b981', secondary: '#3b4252', accent: '#10b981' });
@@ -322,17 +323,14 @@ const ApiKeySettings = ({ isOpen, onClose }: ApiKeySettingsProps) => {
     }
   };
 
-  if (!isOpen) return null;
+  if (!isOpen && !contentOnly) return null;
 
   const paidProviders = API_PROVIDERS.filter(p => p.category === 'paid');
   const imageProviders = API_PROVIDERS.filter(p => p.category === 'image');
 
-  return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50" onClick={onClose}>
-      <div 
-        className="bg-background border border-border rounded-lg shadow-lg p-6 w-full max-w-2xl max-h-[90vh] overflow-y-auto mx-4"
-        onClick={(e) => e.stopPropagation()}
-      >
+  const content = (
+    <>
+      {!contentOnly && (
         <div className="flex items-center justify-between mb-6">
           <h2 className="text-2xl font-semibold">API Keys</h2>
           <Button
@@ -344,7 +342,9 @@ const ApiKeySettings = ({ isOpen, onClose }: ApiKeySettingsProps) => {
             <X className="h-4 w-4" />
           </Button>
         </div>
+      )}
 
+      <div className={contentOnly ? "p-6 overflow-y-auto max-h-full" : ""}>
         <p className="text-sm text-muted-foreground mb-6">
           Add your API keys to use different AI models. Keys are stored locally in your browser. Click on provider names to get your API key.
         </p>
@@ -704,6 +704,21 @@ const ApiKeySettings = ({ isOpen, onClose }: ApiKeySettingsProps) => {
             </div>
           )}
         </div>
+      </div>
+    </>
+  );
+
+  if (contentOnly) {
+    return content;
+  }
+
+  return (
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50" onClick={onClose}>
+      <div
+        className="bg-background border border-border rounded-lg shadow-lg p-6 w-full max-w-2xl max-h-[90vh] overflow-y-auto mx-4"
+        onClick={(e) => e.stopPropagation()}
+      >
+        {content}
       </div>
     </div>
   );

@@ -210,11 +210,7 @@ export class CodeExecutor {
       const hasClosingBackticks = fullMatch.endsWith('```');
       const isComplete = hasClosingBackticks;
       
-      // Debug: Log what we found
       const isDataQueryResult = this.isDataQuery(code);
-      console.log(`🔍 Code block candidate: type=${type}, length=${code.length}, isDataQuery=${isDataQueryResult}, complete=${isComplete}, hasClosing=${hasClosingBackticks}`);
-      console.log(`   First 100 chars: ${code.substring(0, 100).replace(/\n/g, '\\n')}`);
-      console.log(`   Last 50 chars: ${code.substring(Math.max(0, code.length - 50)).replace(/\n/g, '\\n')}`);
       
       if (code.length > 10 && isDataQueryResult) {
         // CRITICAL: Detect and skip duplicate code blocks
@@ -259,12 +255,7 @@ export class CodeExecutor {
           type,
           isComplete
         });
-        
-        console.log(`🔍 DEBUG: Block ${blocks.length} ADDED - type: ${type}, length: ${code.length}, preview:`, code.substring(0,80));
-        console.log(`✅ Detected code block ${blocks.length}: ${type} (${code.length} chars, complete: ${isComplete})`);
       } else {
-        const reason = code.length <= 10 ? 'too short' : `isDataQuery=false (doesn't match data query patterns)`;
-        console.log(`⏭️ Skipping code block: ${reason}`);
         // #region agent log
         fetch('http://127.0.0.1:7242/ingest/32c189e0-1daa-40e4-b57d-2657b124730c',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'codeExecutorV2.ts:240',message:'Skipped: validation failed',data:{reason:reason,codeLength:code.length,isDataQuery:isDataQueryResult,codePreview:code.substring(0,100)},timestamp:Date.now(),sessionId:'debug-session',runId:'run1',hypothesisId:'A,C'})}).catch(()=>{});
         // #endregion
@@ -273,9 +264,6 @@ export class CodeExecutor {
         }
       }
     }
-    
-    console.log(`🔍 DEBUG: Detection complete - total blocks: ${blocks.length}`);
-    console.log(`📊 Total code blocks detected: ${blocks.length}`);
     
     // Pattern 2: XML-style <execute> tags
     const xmlPattern = /<execute>([\s\S]*?)(?:<\/execute>|$)/gi;
@@ -586,20 +574,15 @@ export class CodeExecutor {
     // For large CSV files, data might be null (using DuckDB on-demand)
     // Try to load from DuckDB if csvId is available
     if ((!this.data || !Array.isArray(this.data) || this.data.length === 0)) {
-      console.log('CodeExecutor: No data in memory, checking if can load from DuckDB. csvId:', this.csvId);
       // Check if we have csvId and can load from DuckDB
       if (this.csvId) {
         try {
-          console.log('CodeExecutor: Importing DuckDB module...');
           const { initDuckDB, isDuckDBInitialized } = await import('./duckdb');
-          console.log('CodeExecutor: DuckDB module imported');
           
           // Try to initialize DuckDB if not already initialized
           if (!isDuckDBInitialized()) {
-            console.log('CodeExecutor: DuckDB not initialized, attempting to initialize...');
             try {
               await initDuckDB();
-              console.log('CodeExecutor: DuckDB initialized successfully');
             } catch (initError) {
               console.error('CodeExecutor: Failed to initialize DuckDB:', initError);
               return {
@@ -608,20 +591,13 @@ export class CodeExecutor {
                 executionTime: 0
               };
             }
-          } else {
-            console.log('CodeExecutor: DuckDB already initialized');
           }
           
           if (isDuckDBInitialized()) {
             // For large datasets or selections, don't load all data into memory
             // Set empty arrays and let AI use query() function for DuckDB access
-            console.log('⚡ CodeExecutor: Using DuckDB query mode (no data preloading)');
-            console.log('   csvData will be empty - AI must use query() function');
-            
             this.data = [];
             (this as any).csvData = [];
-            
-            console.log('✅ CodeExecutor: Ready for DuckDB query execution')
           } else {
             console.error('❌ CodeExecutor: DuckDB is not initialized after init attempt');
             return {
@@ -648,7 +624,6 @@ export class CodeExecutor {
         };
       }
     } else {
-      console.log('✅ CodeExecutor: Data already in memory:', this.data.length, 'rows');
     }
 
     const startTime = Date.now();
@@ -675,7 +650,6 @@ export class CodeExecutor {
       if (isSample && Array.isArray(data)) {
         data = [...data]; // Create clean copy without metadata
         // Add note about sample in console
-        console.log(`⚠️ Using sample data (${data.length.toLocaleString()} rows) - full dataset has ${totalRows?.toLocaleString() || 'unknown'} rows. Use DuckDB queries for full dataset.`);
       }
       
       // Also provide csvData as an alias for data when it's CSV data (for compatibility)
@@ -685,9 +659,6 @@ export class CodeExecutor {
       // IMPORTANT: If data is empty but csvId exists, code MUST use query() function
       // Inject a helpful note that will be visible if code tries to use empty data
       const dataIsEmpty = (!data || !Array.isArray(data) || data.length === 0) && (!csvData || !Array.isArray(csvData) || csvData.length === 0);
-      if (dataIsEmpty && this.csvId) {
-        console.log('⚠️ Data arrays are empty. Code must use: const result = await query("SELECT * FROM csvData ...");');
-      }
       // Provide matchInfo and summary only if matchData exists (for backward compatibility)
       // For universal data, use minimal empty objects - code should only use the data array
       const matchInfo = this.matchData?.matchInfo || {} as any;
@@ -758,7 +729,6 @@ export class CodeExecutor {
           const { executeDuckDBSql, initDuckDB, isDuckDBInitialized, getDuckDBTableName } = await import('./duckdb');
           
           if (!isDuckDBInitialized()) {
-            console.log('query(): DuckDB not initialized, initializing now...');
             await initDuckDB();
           }
           
@@ -774,7 +744,6 @@ export class CodeExecutor {
             // Replace all occurrences of csvData (case-insensitive, as a complete word)
             // Use word boundaries to avoid replacing it within other identifiers
             modifiedSql = sql.replace(/\bcsvData\b/gi, `"${actualTableName.replace(/"/g, '""')}"`);
-            console.log(`query(): Replaced 'csvData' with actual table name: ${actualTableName}`);
           } else {
             // Table name not found - will likely fail but let DuckDB handle the error
             console.warn(`query(): Could not find DuckDB table name for CSV ID: ${csvIds[0]}`);
@@ -839,11 +808,6 @@ export class CodeExecutor {
       // If matchInfo exists in execution state, it will be in filteredStateKeys
       const allParams = [...baseParams, ...filteredStateKeys];
       const allValues = [data, csvData, summary, queryFunction, ...filteredStateValues];
-      
-      // DEBUG: Log available variables for debugging
-      if (stateKeys.length > 0) {
-        console.log(`🔍 Block execution - Available variables from previous blocks: ${stateKeys.join(', ')}`);
-      }
 
       // CRITICAL FIX: Auto-handle variable redeclarations
       // If AI tries to redeclare a variable with const/let that already exists in scope,

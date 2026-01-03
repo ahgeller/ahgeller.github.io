@@ -184,7 +184,7 @@ const CSVValueSearch = ({ csvId = null, filterColumn, onSelectValue }: CSVValueS
             {pageValues.map((value, idx) => (
               <div
                 key={idx}
-                className="p-3 cursor-pointer hover:bg-chat-hover transition-colors"
+                className="p-2 cursor-pointer hover:bg-chat-hover transition-colors"
                 onClick={() => handleValueSelect(value)}
               >
                 <div className="text-sm">{value}</div>

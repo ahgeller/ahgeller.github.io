@@ -5,6 +5,11 @@ export interface Message {
   images?: string[]; // Base64 image data
   model?: string; // AI model used for this message
   executionResults?: any; // JSON data from code execution for reference
+  executionStatus?: Array<{ // Which code blocks succeeded/failed - PRIMARY source for red/green boxes
+    index: number;          // Code block index (0-based)
+    success: boolean;       // true = green box, false = red/orange box
+    error?: string;         // Error message if failed (red if regular error, orange if starts with "Skipped:")
+  }>;
 }
 
 export interface Chat {
@@ -26,6 +31,7 @@ export interface Chat {
   csvDisplayColumns?: string[]; // Columns set to display mode for CSV
   csvDisplayValues?: Record<string, string | null>; // Display values for the selected CSV group
   selectedCsvIds?: string[]; // Array of CSV IDs to combine into a table
+  selectedCsvFileNames?: string[]; // Array of CSV file names corresponding to selectedCsvIds
   selectedContextSectionId?: string | null; // Selected context section ID for this chat
   maxFollowupDepth?: number; // Maximum number of followup exchanges (default: 0 = no limit)
 }

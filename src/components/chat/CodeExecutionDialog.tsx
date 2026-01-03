@@ -12,6 +12,9 @@ export function CodeExecutionDialog({ blocks, onApprove, onReject }: CodeExecuti
   const [selectedBlock, setSelectedBlock] = useState(0);
   const [editedBlocks, setEditedBlocks] = useState<CodeBlock[]>(blocks);
   const [isEditing, setIsEditing] = useState(false);
+  const [selectedBlockIndices, setSelectedBlockIndices] = useState<Set<number>>(
+    new Set(blocks.map((_, idx) => idx)) // All selected by default
+  );
 
   const handleCodeChange = (value: string) => {
     const newBlocks = [...editedBlocks];
@@ -19,10 +22,27 @@ export function CodeExecutionDialog({ blocks, onApprove, onReject }: CodeExecuti
     setEditedBlocks(newBlocks);
   };
 
+  const toggleBlockSelection = (idx: number) => {
+    const newSelected = new Set(selectedBlockIndices);
+    if (newSelected.has(idx)) {
+      newSelected.delete(idx);
+    } else {
+      newSelected.add(idx);
+    }
+    setSelectedBlockIndices(newSelected);
+  };
+
   const handleApprove = () => {
+    // Filter to only selected blocks
+    const selectedBlocks = editedBlocks.filter((_, idx) => selectedBlockIndices.has(idx));
+    if (selectedBlocks.length === 0) return; // Don't execute if nothing selected
+
     // Pass edited blocks if they were modified
-    const hasChanges = editedBlocks.some((block, idx) => block.code !== blocks[idx].code);
-    onApprove(hasChanges ? editedBlocks : undefined);
+    const hasChanges = selectedBlocks.some((block) => {
+      const originalIdx = editedBlocks.indexOf(block);
+      return block.code !== blocks[originalIdx].code;
+    });
+    onApprove(hasChanges ? selectedBlocks : undefined);
   };
 
   return (
@@ -35,7 +55,7 @@ export function CodeExecutionDialog({ blocks, onApprove, onReject }: CodeExecuti
             <div>
               <h2 className="text-base font-semibold text-white">Review & Execute Code</h2>
               <p className="text-xs text-muted-foreground">
-                {blocks.length} block{blocks.length > 1 ? 's' : ''} detected
+                {selectedBlockIndices.size} of {blocks.length} block{blocks.length > 1 ? 's' : ''} selected
               </p>
             </div>
           </div>
@@ -55,17 +75,25 @@ export function CodeExecutionDialog({ blocks, onApprove, onReject }: CodeExecuti
             <div className="px-4 pt-3 pb-2 border-b border-border/30">
               <div className="flex gap-1.5 overflow-x-auto">
                 {blocks.map((block, idx) => (
-                  <button
-                    key={idx}
-                    onClick={() => setSelectedBlock(idx)}
-                    className={`px-3 py-1.5 rounded text-xs font-medium transition-all whitespace-nowrap ${
-                      selectedBlock === idx
-                        ? 'bg-primary text-white'
-                        : 'bg-white/5 text-muted-foreground hover:bg-white/10'
-                    }`}
-                  >
-                    Block {idx + 1}
-                  </button>
+                  <div key={idx} className="flex items-center gap-1.5">
+                    <input
+                      type="checkbox"
+                      checked={selectedBlockIndices.has(idx)}
+                      onChange={() => toggleBlockSelection(idx)}
+                      className="w-3.5 h-3.5 rounded border-border/50 bg-white/5 checked:bg-primary checked:border-primary cursor-pointer"
+                      onClick={(e) => e.stopPropagation()}
+                    />
+                    <button
+                      onClick={() => setSelectedBlock(idx)}
+                      className={`px-3 py-1.5 rounded text-xs font-medium transition-all whitespace-nowrap ${
+                        selectedBlock === idx
+                          ? 'bg-primary text-white'
+                          : 'bg-white/5 text-muted-foreground hover:bg-white/10'
+                      }`}
+                    >
+                      Block {idx + 1}
+                    </button>
+                  </div>
                 ))}
               </div>
             </div>
@@ -146,10 +174,15 @@ export function CodeExecutionDialog({ blocks, onApprove, onReject }: CodeExecuti
           </div>
           <button
             onClick={handleApprove}
-            className="px-4 py-1.5 rounded text-xs font-medium bg-primary hover:bg-primary/80 text-white transition-all flex items-center gap-1.5 shadow-lg shadow-primary/20"
+            disabled={selectedBlockIndices.size === 0}
+            className={`px-4 py-1.5 rounded text-xs font-medium transition-all flex items-center gap-1.5 shadow-lg ${
+              selectedBlockIndices.size === 0
+                ? 'bg-gray-600 text-gray-400 cursor-not-allowed'
+                : 'bg-primary hover:bg-primary/80 text-white shadow-primary/20'
+            }`}
           >
             <Play className="w-3 h-3" />
-            Run Code
+            Run {selectedBlockIndices.size > 0 ? `${selectedBlockIndices.size} ` : ''}Block{selectedBlockIndices.size !== 1 ? 's' : ''}
           </button>
         </div>
       </div>

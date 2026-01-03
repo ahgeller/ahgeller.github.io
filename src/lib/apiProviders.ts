@@ -183,7 +183,6 @@ async function callOpenRouterApi(options: ApiCallOptions) {
       // Model not found in settings or has invalid limit - use conservative default
       // User should configure this in settings for accurate token management
       totalContextLimit = 128000; // Conservative default (128k) - user should set this in settings
-      console.warn(`⚠️ Model "${model}" not found in context limits map or has invalid limit. Using conservative default: ${totalContextLimit}. Please configure this model's context limit in Settings.`);
     }
     const remainingContext = totalContextLimit - inputEstimate;
     
@@ -192,17 +191,22 @@ async function callOpenRouterApi(options: ApiCallOptions) {
     if (remainingContext > 0) {
       const maxAllowedOutput = Math.floor(remainingContext * 0.85);
       if (maxTokens > maxAllowedOutput) {
-        console.log(`📊 Dynamic max_tokens: input ~${inputEstimate} tokens, model limit ${totalContextLimit}, remaining ${remainingContext}, capping output from ${maxTokens} to ${maxAllowedOutput}`);
         maxTokens = maxAllowedOutput;
       }
     } else if (remainingContext <= 0) {
       // Input already exceeds or equals context limit - set very low output limit
-      console.warn(`⚠️ Input tokens (${inputEstimate}) exceed or equal model limit (${totalContextLimit}) - setting minimal output`);
       maxTokens = 2000;
     }
     
     // Ensure at least some output is possible (minimum 2000 tokens)
     maxTokens = Math.max(maxTokens, 2000);
+
+    // Cap max_tokens to reasonable limit (most responses don't need 100k+ tokens)
+    // Increased to 16000 to allow for complex error handling, code generation, and clarifying questions
+    maxTokens = Math.min(maxTokens, 16000);
+    
+    // Log token information
+    console.log(`📊 Tokens: Input ~${inputEstimate.toLocaleString()}, Context ${totalContextLimit.toLocaleString()}, Remaining ${remainingContext.toLocaleString()}, Max Output ${maxTokens.toLocaleString()}`);
     
     const requestBody: any = {
       model: model,
@@ -235,6 +239,7 @@ async function callOpenRouterApi(options: ApiCallOptions) {
       let errorMessage = `API error: ${response.status}`;
       try {
         const errorData = await response.json();
+        console.error('❌ API error response:', errorData);
         // OpenRouter error format: { error: { message: "...", type: "...", code: "..." } }
         if (errorData.error) {
           errorMessage = errorData.error.message || errorData.error.type || errorMessage;
@@ -249,6 +254,7 @@ async function callOpenRouterApi(options: ApiCallOptions) {
         // If JSON parsing fails, try to get text
         const text = await response.text().catch(() => '');
         if (text) {
+          console.error('❌ API error text:', text.substring(0, 200));
           errorMessage = text.substring(0, 200); // Limit error message length
         }
       }
@@ -268,10 +274,35 @@ async function callOpenRouterApi(options: ApiCallOptions) {
       // Empty callback - just keeps the event loop active
     }, 100);
 
+    // Track if we've received any data to detect stalled streams
+    let hasReceivedData = false;
+    let lastDataTime = Date.now();
+    const STREAM_TIMEOUT_MS = 30000; // 30 second timeout for each chunk
+
     try {
       while (true) {
-        const { done, value } = await reader.read();
-        if (done) break;
+        // Add timeout for each read operation to prevent infinite hangs
+        const readPromise = reader.read();
+        let timeoutId: NodeJS.Timeout;
+        const timeoutPromise = new Promise<never>((_, reject) => {
+          timeoutId = setTimeout(() => {
+            reject(new Error(`Stream read timeout - no data received for ${STREAM_TIMEOUT_MS / 1000}s. The API may be overloaded or the model may be unavailable.`));
+          }, STREAM_TIMEOUT_MS);
+        });
+
+        const { done, value } = await Promise.race([readPromise, timeoutPromise]);
+        clearTimeout(timeoutId!); // Clear timeout once we get data
+
+        if (done) {
+          // Check if we received any data at all
+          if (!hasReceivedData) {
+            throw new Error('Stream ended without receiving any data from API. The model may be overloaded or unavailable.');
+          }
+          break;
+        }
+
+        hasReceivedData = true;
+        lastDataTime = Date.now();
 
         buffer += decoder.decode(value, { stream: true });
         const lines = buffer.split('\n');
@@ -302,9 +333,6 @@ async function callOpenRouterApi(options: ApiCallOptions) {
               const finishReason = json.choices?.[0]?.finish_reason;
               if (finishReason === 'length') {
                 console.error('⚠️ Response was truncated due to token limit! finish_reason: length');
-                // Still continue processing what we got, but log the issue
-              } else if (finishReason) {
-                console.log('Response finished with reason:', finishReason);
               }
               
               // Handle final message with reasoning_details (for reasoning models)
