@@ -250,8 +250,8 @@ function DirectECharts({
           top: 50, // Push legend below title/subtitle
           textStyle: { color: '#fff', ...(option.legend as any)?.textStyle }
         } : undefined,
-        // Grid settings with proper spacing
-        grid: shouldHaveDataZoom ? {
+        // Grid settings with proper spacing - preserve multi-grid layouts
+        grid: option.grid ? option.grid : (shouldHaveDataZoom ? {
           left: '5%',
           right: '8%',
           bottom: 80, // Space for zoom slider + x-axis labels
@@ -263,7 +263,7 @@ function DirectECharts({
           bottom: 60, // Space for x-axis labels
           top: 90, // Space for title + legend
           containLabel: true
-        },
+        }),
         // Enhance axis labels to prevent cutoff
         xAxis: option.xAxis ? (Array.isArray(option.xAxis) ? option.xAxis.map((axis: any) => ({
           ...axis,
