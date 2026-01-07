@@ -914,7 +914,6 @@ const ChatMain = ({
           let progressStartTime: number | null = null;
           let progressTimeout: NodeJS.Timeout | null = null;
           let lastProgress: { file: string; percent: number; rows?: number } | null = null;
-          let isProgressBarVisible = false;
           
           let completed = false;
           return (progress: { file: string; percent: number; rows?: number }) => {
@@ -930,7 +929,6 @@ const ChatMain = ({
               if (progress.percent >= 100) {
                 setCsvLoadingProgress(null);
                 completed = true;
-                isProgressBarVisible = false;
               } else {
                 setCsvLoadingProgress(progress); // Show errors immediately
                 setTimeout(() => {
@@ -946,25 +944,13 @@ const ChatMain = ({
               progressStartTime = Date.now();
               // Only show progress bar if loading takes > 300ms
               progressTimeout = setTimeout(() => {
-                if (lastProgress && lastProgress.percent < 100 && !completed) {
-                  isProgressBarVisible = true;
-                  // Create new object to trigger re-render
-                  setCsvLoadingProgress({ ...lastProgress });
+                if (lastProgress && lastProgress.percent < 100) {
+                  setCsvLoadingProgress(lastProgress);
                 }
               }, 300);
-            } else if (isProgressBarVisible) {
-              // Progress bar is already visible, update immediately with new object
-              if (!completed) {
-                setCsvLoadingProgress({ ...progress });
-              }
-            } else {
-              // Not visible yet, but check if we're past the threshold
-              const elapsed = Date.now() - progressStartTime;
-              if (elapsed > 300 && !completed) {
-                isProgressBarVisible = true;
-                // Create new object to ensure React detects the change
-                setCsvLoadingProgress({ ...progress });
-              }
+            } else if (Date.now() - progressStartTime > 300) {
+              // Already past threshold, update immediately
+              if (!completed) setCsvLoadingProgress(progress);
             }
           };
         })(),

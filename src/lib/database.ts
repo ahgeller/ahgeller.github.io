@@ -112,6 +112,17 @@ export function getAvailableMatches(): Match[] {
   return availableMatches;
 }
 
+// List all tables in the database
+export async function listDatabaseTables(): Promise<string[]> {
+  try {
+    const result = await callDbApi('listTables');
+    return result.tables || [];
+  } catch (error) {
+    console.error('Failed to list database tables:', error);
+    return [];
+  }
+}
+
 // Get database connection status (for compatibility)
 export function getDbConnection(): any {
   // Return a proxy object that mimics the old Neon API for compatibility

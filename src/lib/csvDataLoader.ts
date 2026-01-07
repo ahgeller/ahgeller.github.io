@@ -286,93 +286,71 @@ export async function loadCsvDataWithValueInfo(
               onProgress({ file: displayName, percent: 0, message: 'Generating value info summary for AI...' });
             }
 
-            // Query a small sample for each CSV ID
-            // For arrays, we'll create valueInfo for each one separately
-            let processedCount = 0;
-            const totalFiles = csvIds.length;
-            for (let i = 0; i < csvIds.length; i++) {
-              const id = csvIds[i];
-              const existingValueInfo = getValueInfo(id, 'csv', chatId);
-              if (!existingValueInfo) {
-                try {
-                  // Get individual file name for progress
-                  const currentFile = files.find((f: any) => f.id === id);
-                  const currentFileName = currentFile?.name || id;
+            // IMPORTANT: For multiple files, create ONE combined value info
+            // For single file, create value info for that file
+            try {
+              // Check if value info already exists
+              let valueInfoExists = false;
 
-                  // Update progress BEFORE starting work (use i, not processedCount)
-                  const startPercent = Math.floor((i / totalFiles) * 90); // 0-90%
-                  if (onProgress) {
-                    onProgress({
-                      file: fileNames.length > 1 ? `${currentFileName} (${i + 1}/${totalFiles})` : currentFileName,
-                      percent: startPercent,
-                      message: 'Generating value info summary...'
-                    });
-                  }
-
-                  // Query a small sample from DuckDB
-                  const sampleData = await queryCSVWithDuckDB(
-                    id, // Single ID, not array
-                    csvFilterColumns,
-                    csvFilterValues,
-                    undefined // No progress callback to avoid nested loading bars
-                  );
-
-                  // Update progress after querying (midpoint)
-                  const midPercent = Math.floor(((i + 0.5) / totalFiles) * 90);
-                  if (onProgress) {
-                    onProgress({
-                      file: fileNames.length > 1 ? `${currentFileName} (${i + 1}/${totalFiles})` : currentFileName,
-                      percent: midPercent,
-                      message: 'Generating value info summary...'
-                    });
-                  }
-
-                  // Use a smaller sample for valueInfo creation (max 1000 rows)
-                  const valueInfoSample = sampleData.slice(0, sampleSize);
-                  if (valueInfoSample.length > 0) {
-                    await createValueInfoForCsv(valueInfoSample, id, chatId, false);
-                  }
-                  
-                  // Update progress after completing this file
-                  processedCount++;
-                  const endPercent = Math.floor((processedCount / totalFiles) * 90);
-                  if (onProgress) {
-                    onProgress({
-                      file: fileNames.length > 1 ? `${currentFileName} (${processedCount}/${totalFiles})` : currentFileName,
-                      percent: endPercent,
-                      message: 'Generating value info summary...'
-                    });
-                  }
-                } catch (e) {
-                  console.warn(`Failed to create valueInfo from DuckDB sample for ${id}:`, e);
-                  processedCount++;
-                  // Update progress even on error
-                  const errorPercent = Math.floor((processedCount / totalFiles) * 90);
-                  if (onProgress) {
-                    const currentFile = files.find((f: any) => f.id === id);
-                    const currentFileName = currentFile?.name || id;
-                    onProgress({
-                      file: fileNames.length > 1 ? `${currentFileName} (${processedCount}/${totalFiles})` : currentFileName,
-                      percent: errorPercent,
-                      message: 'Generating value info summary...'
-                    });
-                  }
-                  // Continue with next ID
-                }
+              if (csvIds.length > 1) {
+                // Multiple files - check if combined value info exists
+                const combinedId = `combined_${[...csvIds].sort().join('_')}`;
+                const combinedValueInfo = getValueInfo(combinedId, 'csv', chatId);
+                valueInfoExists = !!combinedValueInfo;
               } else {
-                processedCount++;
-                // Update progress even for files that already have valueInfo
-                const skipPercent = Math.floor((processedCount / totalFiles) * 90);
+                // Single file - check if value info exists for that file
+                const singleValueInfo = getValueInfo(csvIds[0], 'csv', chatId);
+                valueInfoExists = !!singleValueInfo;
+              }
+
+              if (!valueInfoExists) {
+                // Query combined data from all CSV files
                 if (onProgress) {
-                  const currentFile = files.find((f: any) => f.id === id);
-                  const currentFileName = currentFile?.name || id;
                   onProgress({
-                    file: fileNames.length > 1 ? `${currentFileName} (${processedCount}/${totalFiles})` : currentFileName,
-                    percent: skipPercent,
+                    file: displayName,
+                    percent: 30,
+                    message: csvIds.length > 1 ? 'Querying combined data from all files...' : 'Querying data...'
+                  });
+                }
+
+                // Query all files together to get combined data
+                const { queryCombinedCSVsWithDuckDB } = await import("@/lib/duckdb");
+                const sampleData = await queryCombinedCSVsWithDuckDB(
+                  csvIds, // Pass all IDs to combine data
+                  csvFilterColumns,
+                  csvFilterValues,
+                  undefined // No progress callback to avoid nested loading bars
+                );
+
+                if (onProgress) {
+                  onProgress({
+                    file: displayName,
+                    percent: 60,
                     message: 'Generating value info summary...'
                   });
                 }
+
+                // Use a smaller sample for valueInfo creation (max 1000 rows)
+                const valueInfoSample = sampleData.slice(0, sampleSize);
+                if (valueInfoSample.length > 0) {
+                  // This will create ONE combined value info for multiple files
+                  await createValueInfoForCsvs(valueInfoSample, csvIds, chatId);
+                }
+
+                if (onProgress) {
+                  onProgress({
+                    file: displayName,
+                    percent: 90,
+                    message: csvIds.length > 1
+                      ? 'Created combined value info for all files'
+                      : 'Created value info'
+                  });
+                }
+              } else {
+                console.log('✅ Value info already exists, skipping generation');
               }
+            } catch (e) {
+              console.warn(`Failed to create valueInfo from DuckDB sample:`, e);
             }
 
             // Complete
@@ -585,6 +563,7 @@ async function createValueInfoForCsv(
 
 /**
  * Create value info for multiple CSV files
+ * IMPORTANT: When multiple files are selected, creates ONE combined value info
  */
 async function createValueInfoForCsvs(
   csvData: any[],
@@ -592,8 +571,36 @@ async function createValueInfoForCsvs(
   chatId?: string
 ): Promise<void> {
   const csvIds = Array.isArray(csvId) ? csvId : [csvId];
-  
-  for (const id of csvIds) {
+
+  // If multiple files, create ONE combined value info
+  if (csvIds.length > 1) {
+    try {
+      const files = await getCsvFileMetadata();
+
+      // Create a combined ID by joining all CSV IDs
+      const combinedId = `combined_${[...csvIds].sort().join('_')}`;
+
+      // Check if combined value info already exists
+      const existingValueInfo = getValueInfo(combinedId, 'csv', chatId);
+      if (existingValueInfo) {
+        console.log('✅ Combined value info already exists:', combinedId);
+        return;
+      }
+
+      // Get all file metadata
+      const selectedFiles = files.filter((f: any) => csvIds.includes(f.id));
+      const fileNames = selectedFiles.map((f: any) => f.name).join(' + ');
+      const totalRowCount = selectedFiles.reduce((sum: number, f: any) => sum + (f.rowCount || 0), 0);
+
+      // Create combined value info using the combined data
+      console.log(`✅ Creating combined value info for ${csvIds.length} files: ${fileNames}`);
+      autoInspectData(csvData, combinedId, 'csv', fileNames, chatId, totalRowCount);
+    } catch (e) {
+      console.warn('createValueInfoForCsvs: Failed to create combined value info:', e);
+    }
+  } else {
+    // Single file - create value info for that file
+    const id = csvIds[0];
     const existingValueInfo = getValueInfo(id, 'csv', chatId);
     if (!existingValueInfo) {
       await createValueInfoForCsv(csvData, id, chatId, false);

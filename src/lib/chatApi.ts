@@ -198,12 +198,19 @@ function getCodingRules(): string {
   return getDefaultCodingRules();
 }
 
-export function getDefaultCodingRules(): string {
+export function getDefaultCodingRules(isDatabaseTable: boolean = false): string {
 
   const defaultRules = `═══ EXECUTION FLOW ═══
 🚨 CRITICAL: If you see "CODE EXECUTION COMPLETE" with results → DO NOT instantly re-plan or re-code → follow followup instructions!
 
 P.S. if you can answer a question without code, answer without code
+
+${isDatabaseTable ? `🚨 DATABASE TABLE MODE: You are working with a database table that has been pre-loaded into memory. DO NOT generate SQL queries. Instead:
+- Use JavaScript array methods (filter, map, reduce, etc.) on the 'data' variable
+- The data is already in memory - no need to query the database
+- Example: const result = data.filter(row => row.team === 'UCSD');
+- This prevents excessive database queries` : ''}
+
 1. VERIFY: Check if all steps completed & answer user's question (if not a followup ignore)
 2. PLAN: List all steps needed (e.g., "Step 1: Load data, Step 2: Calculate stats, Step 3: Create chart")
 3. CODE: Write ALL \`\`\`execute blocks for each step (start each block with //step: N)
@@ -1139,7 +1146,17 @@ export function buildVolleyballContext(
     summaryText = `\n\n📋 DATASET SUMMARY:\n${currentSelectionValueInfo.summary}`;
   } else if (csvId) {
     const csvIds = Array.isArray(csvId) ? csvId : [csvId];
-    const csvValueInfo = csvIds.length > 0 ? getValueInfo(csvIds[0], 'csv', chatId) : null;
+    let csvValueInfo = null;
+
+    if (csvIds.length > 1) {
+      // Multiple files - look for combined value info
+      const combinedId = `combined_${[...csvIds].sort().join('_')}`;
+      csvValueInfo = getValueInfo(combinedId, 'csv', chatId);
+    } else if (csvIds.length === 1) {
+      // Single file - look for single value info
+      csvValueInfo = getValueInfo(csvIds[0], 'csv', chatId);
+    }
+
     if (csvValueInfo?.summary) {
       summaryText = `\n\n📋 DATASET SUMMARY:\n${csvValueInfo.summary}`;
     }
@@ -2681,8 +2698,17 @@ export async function sendChatMessage(
         // Only fetch csvFileValueInfo if we don't have valueInfoForContext and no filters are applied
         if (!valueInfoForContext && csvId && csvFileName) {
           const csvIdsForValueInfo = Array.isArray(csvId) ? csvId : [csvId];
-          const csvFileValueInfo = getValueInfo(csvIdsForValueInfo[0], 'csv', chatId);
-          
+          let csvFileValueInfo = null;
+
+          if (csvIdsForValueInfo.length > 1) {
+            // Multiple files - look for combined value info
+            const combinedId = `combined_${csvIdsForValueInfo.sort().join('_')}`;
+            csvFileValueInfo = getValueInfo(combinedId, 'csv', chatId);
+          } else if (csvIdsForValueInfo.length === 1) {
+            // Single file - look for single value info
+            csvFileValueInfo = getValueInfo(csvIdsForValueInfo[0], 'csv', chatId);
+          }
+
           // CRITICAL: Validate that csvFileValueInfo matches the actual CSV file
           if (csvFileValueInfo) {
             if (csvFileValueInfo.name === csvFileName) {
@@ -2763,8 +2789,17 @@ export async function sendChatMessage(
             // Use buildVolleyballContext with CSV file info (will include value info if available)
             // hasData = true because hasAnyValueInfo indicates data is selected
             // Get value info for the CSV file to pass to buildVolleyballContext
-            let csvFileValueInfo = csvIds.length > 0 ? getValueInfo(csvIds[0], 'csv', chatId) : null;
-            
+            let csvFileValueInfo = null;
+
+            if (csvIds.length > 1) {
+              // Multiple files - look for combined value info
+              const combinedId = `combined_${[...csvIds].sort().join('_')}`;
+              csvFileValueInfo = getValueInfo(combinedId, 'csv', chatId);
+            } else if (csvIds.length === 1) {
+              // Single file - look for single value info
+              csvFileValueInfo = getValueInfo(csvIds[0], 'csv', chatId);
+            }
+
             // CRITICAL FIX: Validate csvFileValueInfo matches CSV file name
             if (csvFileValueInfo && csvFileName && csvFileValueInfo.name !== csvFileName) {
               console.error(`❌ VALUE INFO MISMATCH (else branch):
@@ -3400,7 +3435,17 @@ Do NOT include Block 1 again!`;
                 if (!errorFixValueInfo) {
                   const csvIds = csvId ? (Array.isArray(csvId) ? csvId : [csvId]) : [];
                   if (csvIds.length > 0) {
-                    let retrievedValueInfo = getValueInfo(csvIds[0], 'csv', chatId);
+                    let retrievedValueInfo = null;
+
+                    if (csvIds.length > 1) {
+                      // Multiple files - look for combined value info
+                      const combinedId = `combined_${[...csvIds].sort().join('_')}`;
+                      retrievedValueInfo = getValueInfo(combinedId, 'csv', chatId);
+                    } else if (csvIds.length === 1) {
+                      // Single file - look for single value info
+                      retrievedValueInfo = getValueInfo(csvIds[0], 'csv', chatId);
+                    }
+
                     // CRITICAL FIX: Validate valueInfo matches CSV file name
                     if (retrievedValueInfo && csvFileName && retrievedValueInfo.name !== csvFileName) {
                       console.error(`❌ VALUE INFO MISMATCH (error-fix):
@@ -3464,7 +3509,17 @@ The error above was likely caused by using a column name that doesn't exist. Che
                 // Try to get valueInfo from csvId if not already available
                 const csvIds = csvId ? (Array.isArray(csvId) ? csvId : [csvId]) : [];
                 if (csvIds.length > 0) {
-                  const baseCsvValueInfo = getValueInfo(csvIds[0], 'csv', chatId);
+                  let baseCsvValueInfo = null;
+
+                  if (csvIds.length > 1) {
+                    // Multiple files - look for combined value info
+                    const combinedId = `combined_${[...csvIds].sort().join('_')}`;
+                    baseCsvValueInfo = getValueInfo(combinedId, 'csv', chatId);
+                  } else if (csvIds.length === 1) {
+                    // Single file - look for single value info
+                    baseCsvValueInfo = getValueInfo(csvIds[0], 'csv', chatId);
+                  }
+
                   if (baseCsvValueInfo && baseCsvValueInfo.columns) {
                     const columnNames = baseCsvValueInfo.columns.map((col: any) => col.name).join(', ');
                     const columnInfo = generateColumnInfoString(baseCsvValueInfo.columns, (baseCsvValueInfo as any).totalRowCount || 0);
@@ -3893,7 +3948,17 @@ The results above contain real data. Use them to answer: "${originalUserMessage}
                 if (!followUpValueInfo) {
                   const csvIds = csvId ? (Array.isArray(csvId) ? csvId : [csvId]) : [];
                   if (csvIds.length > 0) {
-                    let retrievedValueInfo = getValueInfo(csvIds[0], 'csv', chatId);
+                    let retrievedValueInfo = null;
+
+                    if (csvIds.length > 1) {
+                      // Multiple files - look for combined value info
+                      const combinedId = `combined_${[...csvIds].sort().join('_')}`;
+                      retrievedValueInfo = getValueInfo(combinedId, 'csv', chatId);
+                    } else if (csvIds.length === 1) {
+                      // Single file - look for single value info
+                      retrievedValueInfo = getValueInfo(csvIds[0], 'csv', chatId);
+                    }
+
                     // CRITICAL FIX: Validate valueInfo matches CSV file name
                     if (retrievedValueInfo && csvFileName && retrievedValueInfo.name !== csvFileName) {
                       console.error(`❌ VALUE INFO MISMATCH (follow-up):

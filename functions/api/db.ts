@@ -31,51 +31,28 @@ export async function onRequestPost({ request, env }: { request: Request; env: a
     };
 
     // Helper function to query Neon Postgres
-    // Neon uses tagged template literals: sql`SELECT * FROM table WHERE id = ${value}`
     const queryNeon = async (sqlQuery: string, queryParams?: any[]): Promise<any[]> => {
       const { neon } = await import('@neondatabase/serverless');
       const sql = neon(env.NEON_CONNECTION_STRING);
       
       if (queryParams && queryParams.length > 0) {
-        // Convert PostgreSQL $1, $2 placeholders to template literal format
-        // Split query by placeholders and reconstruct as tagged template
-        const parts: string[] = [];
-        const values: any[] = [];
-        let lastIndex = 0;
-        
-        // Find all $N placeholders
-        const placeholderRegex = /\$(\d+)/g;
-        let match;
-        while ((match = placeholderRegex.exec(sqlQuery)) !== null) {
-          const placeholderIndex = parseInt(match[1]) - 1; // $1 -> index 0
-          if (placeholderIndex < queryParams.length) {
-            parts.push(sqlQuery.substring(lastIndex, match.index));
-            values.push(queryParams[placeholderIndex]);
-            lastIndex = match.index + match[0].length;
-          }
-        }
-        parts.push(sqlQuery.substring(lastIndex));
-        
-        // Construct tagged template: sql`part1${value1}part2${value2}part3`
-        // Use sql.unsafe() for dynamic queries, or construct template literal
-        if (sql.unsafe) {
-          // Use unsafe for dynamic queries (Neon supports this)
-          return await sql.unsafe(sqlQuery, queryParams);
-        } else {
-          // Fallback: construct template literal manually
-          // Build array: [strings[0], value1, strings[1], value2, strings[2]]
-          const templateArray: any[] = [parts[0]];
-          for (let i = 0; i < values.length; i++) {
-            templateArray.push(values[i]);
-            templateArray.push(parts[i + 1] || '');
-          }
-          // Call sql with template array (Neon accepts this format)
-          const result = await (sql as any)(templateArray);
-          return Array.isArray(result) ? result : (result?.rows || result || []);
-        }
+        // Replace $1, $2 placeholders with actual values (sanitized)
+        // Note: This is a simple approach - for production, consider using a proper SQL builder
+        let processedQuery = sqlQuery;
+        queryParams.forEach((param, index) => {
+          const placeholder = `$${index + 1}`;
+          // Escape single quotes and wrap in quotes for strings
+          const escapedValue = typeof param === 'string' 
+            ? `'${param.replace(/'/g, "''")}'` 
+            : param;
+          processedQuery = processedQuery.replace(placeholder, String(escapedValue));
+        });
+        const result = await sql.unsafe(processedQuery);
+        return Array.isArray(result) ? result : [];
       } else {
-        const result = await sql(sqlQuery);
-        return Array.isArray(result) ? result : (result?.rows || result || []);
+        // For queries without parameters
+        const result = await sql.unsafe(sqlQuery);
+        return Array.isArray(result) ? result : [];
       }
     };
 
@@ -96,21 +73,28 @@ export async function onRequestPost({ request, env }: { request: Request; env: a
           
           if (cached) {
             const cachedData = await cached.json();
-            return new Response(JSON.stringify({ 
-              success: true, 
-              rows: cachedData.rows || [],
-              meta: { cached: true },
-              fromCache: true
-            }), {
-              status: 200,
-              headers: { 'Content-Type': 'application/json' },
-            });
+            // Check if cache is still valid (6 hours for queries - aggressive caching)
+            const cacheAge = Date.now() - (cachedData.timestamp || 0);
+            if (cacheAge < 6 * 60 * 60 * 1000) {
+              // Cache is still valid - return cached data (no database query!)
+              return new Response(JSON.stringify({ 
+                success: true, 
+                rows: cachedData.rows || [],
+                meta: { cached: true },
+                fromCache: true
+              }), {
+                status: 200,
+                headers: { 'Content-Type': 'application/json' },
+              });
+            }
+            // Cache expired - delete it and continue to query Neon
+            await env.R2_BUCKET.delete(cacheKey);
           }
 
           // Cache miss - query Neon
           const result = await queryNeon(query, params);
           
-          // Store in R2 cache (with 1 hour TTL)
+          // Store in R2 cache (with 6 hour TTL - aggressive caching for team use)
           const cacheData = {
             rows: result,
             timestamp: Date.now()
@@ -119,9 +103,9 @@ export async function onRequestPost({ request, env }: { request: Request; env: a
             httpMetadata: {
               contentType: 'application/json',
             },
-            // Cache for 1 hour (3600 seconds)
+            // Cache for 6 hours (aggressive caching to reduce queries)
             customMetadata: {
-              expiresAt: String(Date.now() + 3600000)
+              expiresAt: String(Date.now() + 6 * 60 * 60 * 1000)
             }
           });
           
@@ -160,14 +144,21 @@ export async function onRequestPost({ request, env }: { request: Request; env: a
           
           if (cached) {
             const cachedData = await cached.json();
-            return new Response(JSON.stringify({ 
-              success: true, 
-              count: cachedData.count || 0,
-              fromCache: true
-            }), {
-              status: 200,
-              headers: { 'Content-Type': 'application/json' },
-            });
+            // Check if cache is still valid (6 hours for counts - aggressive caching)
+            const cacheAge = Date.now() - (cachedData.timestamp || 0);
+            if (cacheAge < 6 * 60 * 60 * 1000) {
+              // Cache is still valid - return cached data (no database query!)
+              return new Response(JSON.stringify({ 
+                success: true, 
+                count: cachedData.count || 0,
+                fromCache: true
+              }), {
+                status: 200,
+                headers: { 'Content-Type': 'application/json' },
+              });
+            }
+            // Cache expired - delete it and continue to query Neon
+            await env.R2_BUCKET.delete(cacheKey);
           }
 
           // Build query (PostgreSQL syntax, not SQLite)
@@ -181,10 +172,10 @@ export async function onRequestPost({ request, env }: { request: Request; env: a
           const result = await queryNeon(countQuery);
           const count = result[0]?.count || 0;
           
-          // Cache the result
+          // Cache the result (6 hours - aggressive caching for team use)
           await env.R2_BUCKET.put(cacheKey, JSON.stringify({ count, timestamp: Date.now() }), {
             httpMetadata: { contentType: 'application/json' },
-            customMetadata: { expiresAt: String(Date.now() + 3600000) }
+            customMetadata: { expiresAt: String(Date.now() + 6 * 60 * 60 * 1000) } // 6 hours
           });
           
           return new Response(JSON.stringify({ 
@@ -216,14 +207,21 @@ export async function onRequestPost({ request, env }: { request: Request; env: a
           
           if (cached) {
             const cachedData = await cached.json();
-            return new Response(JSON.stringify({ 
-              success: true, 
-              matches: cachedData.matches || [],
-              fromCache: true
-            }), {
-              status: 200,
-              headers: { 'Content-Type': 'application/json' },
-            });
+            // Check if cache is still valid (24 hours for matches list - changes rarely)
+            const cacheAge = Date.now() - (cachedData.timestamp || 0);
+            if (cacheAge < 24 * 60 * 60 * 1000) {
+              // Cache is still valid - return cached data (no database query!)
+              return new Response(JSON.stringify({ 
+                success: true, 
+                matches: cachedData.matches || [],
+                fromCache: true
+              }), {
+                status: 200,
+                headers: { 'Content-Type': 'application/json' },
+              });
+            }
+            // Cache expired - delete it and continue to query Neon
+            await env.R2_BUCKET.delete(cacheKey);
           }
 
           // Query Neon (PostgreSQL syntax - use double quotes)
@@ -236,13 +234,13 @@ export async function onRequestPost({ request, env }: { request: Request; env: a
           
           const result = await queryNeon(query);
           
-          // Cache the result
+          // Cache the result for 24 hours (matches list changes rarely)
           await env.R2_BUCKET.put(cacheKey, JSON.stringify({ 
             matches: result, 
             timestamp: Date.now() 
           }), {
             httpMetadata: { contentType: 'application/json' },
-            customMetadata: { expiresAt: String(Date.now() + 3600000) }
+            customMetadata: { expiresAt: String(Date.now() + 24 * 60 * 60 * 1000) }
           });
           
           return new Response(JSON.stringify({ 
@@ -255,6 +253,66 @@ export async function onRequestPost({ request, env }: { request: Request; env: a
         } catch (error: any) {
           return new Response(JSON.stringify({ 
             error: error.message || 'Failed to fetch matches',
+            details: error.toString()
+          }), {
+            status: 500,
+            headers: { 'Content-Type': 'application/json' },
+          });
+        }
+      }
+
+      case 'listTables': {
+        // List all tables in the database
+        try {
+          // Check cache (tables list changes rarely, cache for 24 hours)
+          const cacheKey = getCacheKey('listTables');
+          const cached = await env.R2_BUCKET.get(cacheKey);
+          
+          if (cached) {
+            const cachedData = await cached.json();
+            // Check if cache is still valid (24 hours)
+            const cacheAge = Date.now() - (cachedData.timestamp || 0);
+            if (cacheAge < 24 * 60 * 60 * 1000) {
+              return new Response(JSON.stringify({ 
+                success: true, 
+                tables: cachedData.tables || [],
+                fromCache: true
+              }), {
+                status: 200,
+                headers: { 'Content-Type': 'application/json' },
+              });
+            }
+          }
+
+          // Query Neon to get all table names from public schema
+          const query = `SELECT table_name 
+                        FROM information_schema.tables 
+                        WHERE table_schema = 'public' 
+                        AND table_type = 'BASE TABLE'
+                        ORDER BY table_name`;
+          
+          const result = await queryNeon(query);
+          const tables = result.map((row: any) => row.table_name).filter(Boolean);
+          
+          // Cache the result for 24 hours
+          await env.R2_BUCKET.put(cacheKey, JSON.stringify({ 
+            tables, 
+            timestamp: Date.now() 
+          }), {
+            httpMetadata: { contentType: 'application/json' },
+            customMetadata: { expiresAt: String(Date.now() + 24 * 60 * 60 * 1000) }
+          });
+          
+          return new Response(JSON.stringify({ 
+            success: true, 
+            tables
+          }), {
+            status: 200,
+            headers: { 'Content-Type': 'application/json' },
+          });
+        } catch (error: any) {
+          return new Response(JSON.stringify({ 
+            error: error.message || 'Failed to list tables',
             details: error.toString()
           }), {
             status: 500,
@@ -276,20 +334,24 @@ export async function onRequestPost({ request, env }: { request: Request; env: a
           const tableName = params.tableName || 'combined_dvw';
           const matchId = params.matchId;
           
-          // Check cache
+          // Check cache (match data is large, cache for 1 hour)
           const cacheKey = getCacheKey('matchData', undefined, { matchId, tableName }, tableName);
           const cached = await env.R2_BUCKET.get(cacheKey);
           
           if (cached) {
             const cachedData = await cached.json();
-            return new Response(JSON.stringify({ 
-              success: true, 
-              data: cachedData.data || [],
-              fromCache: true
-            }), {
-              status: 200,
-              headers: { 'Content-Type': 'application/json' },
-            });
+            // Check if cache is still valid (1 hour)
+            const cacheAge = Date.now() - (cachedData.timestamp || 0);
+            if (cacheAge < 60 * 60 * 1000) {
+              return new Response(JSON.stringify({ 
+                success: true, 
+                data: cachedData.data || [],
+                fromCache: true
+              }), {
+                status: 200,
+                headers: { 'Content-Type': 'application/json' },
+              });
+            }
           }
 
           // Build comprehensive SELECT query (PostgreSQL syntax)
@@ -312,13 +374,13 @@ export async function onRequestPost({ request, env }: { request: Request; env: a
           
           const result = await queryNeon(query, [matchId]);
           
-          // Cache the result
+          // Cache the result for 6 hours (aggressive caching - match data changes when you update database)
           await env.R2_BUCKET.put(cacheKey, JSON.stringify({ 
             data: result, 
             timestamp: Date.now() 
           }), {
             httpMetadata: { contentType: 'application/json' },
-            customMetadata: { expiresAt: String(Date.now() + 3600000) }
+            customMetadata: { expiresAt: String(Date.now() + 6 * 60 * 60 * 1000) } // 6 hours
           });
           
           return new Response(JSON.stringify({ 

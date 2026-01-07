@@ -9,6 +9,30 @@ const MAX_REGISTERED_FILES = 10; // Maximum files to keep registered
 // Debug flag - set to true to see what's happening
 
 /**
+ * Force reset DuckDB when memory corruption is detected
+ */
+export async function resetDuckDB(): Promise<void> {
+  console.log('🔄 Resetting DuckDB due to memory corruption...');
+
+  // Close all connections if possible
+  if (db) {
+    try {
+      await db.terminate();
+    } catch (e) {
+      // Ignore errors during termination
+    }
+  }
+
+  // Clear state
+  db = null;
+  initialized = false;
+  initializationPromise = null;
+  registeredFiles.clear();
+
+  console.log('✅ DuckDB reset complete');
+}
+
+/**
  * Timeout wrapper for async operations
  */
 function withTimeout<T>(promise: Promise<T>, timeoutMs: number, operationName: string): Promise<T> {
@@ -335,13 +359,13 @@ export async function initDuckDB() {
     if (!AsyncDuckDB) {
       throw new Error('AsyncDuckDB not found');
     }
-    
+
     // Use the recommended pattern: Create Worker manually, then instantiate
     const ConsoleLogger = duckdbModule.ConsoleLogger;
-    
+
     // Create logger with WARN level (level 1) - always create a logger if available
     const logger = ConsoleLogger ? new ConsoleLogger(1) : null;
-    
+
     // Create Worker manually - must use local path, not CDN URL
     const worker = new Worker(workerURL, { type: 'module' });
 
@@ -379,6 +403,7 @@ export async function initDuckDB() {
         'DuckDB OPFS open'
       );
     } catch (openErr) {
+      console.warn('⚠️ OPFS open failed, continuing without persistence:', openErr);
     }
 
     // Configure DuckDB for virtual file-based processing
@@ -569,7 +594,16 @@ export async function processCSVWithDuckDB(
       await testConn.close();
     } catch (testError: any) {
       console.error('❌ DuckDB worker test failed:', testError);
-      throw new Error(`DuckDB worker not ready: ${testError?.message || 'Unknown error'}`);
+
+      // If we get "memory access out of bounds", DuckDB is corrupted
+      // This is a fatal error - throw and let the fallback handler deal with it
+      if (testError?.message?.includes('memory access out of bounds') ||
+          testError?.toString?.()?.includes('memory access out of bounds')) {
+        console.error('❌ DuckDB memory corrupted - cannot recover in this session');
+        throw new Error(`DuckDB memory corrupted: ${testError?.message || 'Unknown error'}. Please refresh the page.`);
+      } else {
+        throw new Error(`DuckDB worker not ready: ${testError?.message || 'Unknown error'}`);
+      }
     }
     
     // Now proceed with actual connection
@@ -650,7 +684,25 @@ export async function processCSVWithDuckDB(
       } catch (readError: any) {
         console.error('Failed to load CSV with native method:', readError);
 
-        // Fallback: Use the manual processCSVWithDuckDBManual function
+        // Check if this is a malformed CSV error (quote errors, parse errors, etc.)
+        const errorMessage = readError?.message || readError?.toString?.() || '';
+        const isMalformedCSV =
+          errorMessage.includes('quote should be followed by') ||
+          errorMessage.includes('Invalid Input Error') ||
+          errorMessage.includes('Error in file') ||
+          errorMessage.includes('CSV Error') ||
+          errorMessage.includes('Parser Error');
+
+        if (isMalformedCSV) {
+          // Malformed CSV file - skip it to prevent DuckDB corruption
+          console.error(`⚠️ SKIPPING malformed CSV file "${fileName}":`, errorMessage);
+          await conn.close();
+
+          // Throw a user-friendly error that won't corrupt DuckDB
+          throw new Error(`File "${fileName}" has malformed data and cannot be processed. ${errorMessage.substring(0, 200)}`);
+        }
+
+        // For other errors, try fallback
         await conn.close();
         return await processCSVWithDuckDBManual(file, fileId, tableName, onProgress);
       }
@@ -681,7 +733,7 @@ export async function processCSVWithDuckDB(
       // Get headers from table schema
       const schemaResult = await conn.query(`DESCRIBE ${tableName}`);
       const headers: string[] = [];
-      
+
       if (schemaResult.toArray && typeof schemaResult.toArray === 'function') {
         const schemaRows = schemaResult.toArray();
         schemaRows.forEach((row: any) => {
@@ -693,6 +745,13 @@ export async function processCSVWithDuckDB(
           const colName = row.column_name || row[0];
           if (colName) headers.push(String(colName));
         });
+      }
+
+      // Check if we have a malformed CSV where all columns ended up as a single comma-separated string
+      if (headers.length === 1 && headers[0].includes(',')) {
+        console.warn(`⚠️ Detected malformed CSV header: "${headers[0]}". This file may have delimiter issues.`);
+        console.warn(`⚠️ Column names containing commas will appear as a single column in the group by dropdown.`);
+        console.warn(`⚠️ Please check the source CSV file's delimiter and format.`);
       }
       
       onProgress?.({ 
@@ -917,6 +976,108 @@ export async function verifyTableExists(tableName: string): Promise<boolean> {
     }
   } catch (error) {
     return false;
+  }
+}
+
+/**
+ * Query multiple CSV files and combine them using UNION ALL
+ * This allows querying across multiple CSV files as if they were one dataset
+ */
+export async function queryCombinedCSVsWithDuckDB(
+  csvIds: string[],
+  filterColumns?: string[] | null,
+  filterValues?: Record<string, string | string[] | null> | null,
+  onProgress?: (progress: { percent: number; message?: string; rows?: number }) => void
+): Promise<any[]> {
+  if (csvIds.length === 0) {
+    return [];
+  }
+
+  // Single file - use regular query
+  if (csvIds.length === 1) {
+    return queryCSVWithDuckDB(csvIds[0], filterColumns, filterValues, onProgress);
+  }
+
+  // Multiple files - combine using UNION ALL
+  const db = await initDuckDB();
+  const conn = await db.connect();
+
+  try {
+    onProgress?.({ percent: 10, message: `Combining ${csvIds.length} files...` });
+
+    // Get table names for all CSV IDs
+    const tableNames: string[] = [];
+    for (const csvId of csvIds) {
+      const cleanCsvId = csvId.replace(/[^a-zA-Z0-9]/g, '_');
+      const tableName = cleanCsvId.startsWith('csv_') ? cleanCsvId : `csv_${cleanCsvId}`;
+      tableNames.push(tableName);
+    }
+
+    // Build WHERE clause for filters
+    let whereClause = '';
+    const whereClauses: string[] = [];
+    if (filterColumns && filterColumns.length > 0 && filterValues) {
+      for (const column of filterColumns) {
+        const value = filterValues[column];
+        if (value !== null && value !== undefined) {
+          const escapedColumn = `"${column.replace(/"/g, '""')}"`;
+          if (Array.isArray(value)) {
+            if (value.length > 0) {
+              const valuesList = value.map(v => `'${String(v).replace(/'/g, "''")}'`).join(', ');
+              whereClauses.push(`${escapedColumn} IN (${valuesList})`);
+            }
+          } else {
+            const escapedValue = String(value).replace(/'/g, "''");
+            whereClauses.push(`${escapedColumn} = '${escapedValue}'`);
+          }
+        }
+      }
+    }
+    if (whereClauses.length > 0) {
+      whereClause = ` WHERE ${whereClauses.join(' AND ')}`;
+    }
+
+    // Build UNION ALL query
+    const unionQueries = tableNames.map(tableName => {
+      const escapedTableName = `"${tableName.replace(/"/g, '""')}"`;
+      return `SELECT * FROM ${escapedTableName}${whereClause}`;
+    });
+    const unionQuery = unionQueries.join(' UNION ALL ');
+
+    onProgress?.({ percent: 50, message: 'Executing combined query...' });
+
+    // Execute the query
+    const result = await conn.query(unionQuery);
+
+    onProgress?.({ percent: 80, message: 'Processing results...' });
+
+    // Convert result to array
+    let data: any[] = [];
+    if (result.toArray && typeof result.toArray === 'function') {
+      const rows = result.toArray();
+      data = rows.map((row: any) => {
+        const obj: any = {};
+        const columns = result.schema.fields.map((f: any) => f.name);
+        columns.forEach((col: string, idx: number) => {
+          obj[col] = row.get?.(col) ?? row[idx] ?? null;
+        });
+        return obj;
+      });
+    } else if (Array.isArray(result)) {
+      data = result;
+    }
+
+    // Convert BigInt values to regular numbers
+    data = convertBigIntToNumber(data);
+
+    onProgress?.({ percent: 100, message: 'Combined query complete', rows: data.length });
+
+    return data;
+  } catch (error) {
+    console.error('❌ Failed to query combined CSVs with DuckDB:', error);
+    throw new Error(`DuckDB combined query failed: ${error instanceof Error ? error.message : 'Unknown error'}`);
+  } finally {
+    await conn.close();
   }
 }
 

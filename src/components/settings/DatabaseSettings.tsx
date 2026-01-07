@@ -4,7 +4,7 @@ import { Input } from "@/components/ui/input";
 import { Button } from "@/components/ui/button";
 import { Textarea } from "@/components/ui/textarea";
 import { X, Plus, Trash2, Upload, FileText, RotateCcw } from "lucide-react";
-import { initVolleyballDB } from "@/lib/database";
+import { initVolleyballDB, listDatabaseTables } from "@/lib/database";
 import { parseCsvText } from "@/lib/csvUtils";
 import { migrateLegacyCsvFile, saveCsvDataText, saveCsvFileMetadata, deleteCsvData, getStorageInfo, migrateAllToIndexedDB, analyzeStorage, cleanupSelectedItems, getAllCsvFileMetadata, deleteCsvFileMetadata } from "@/lib/csvStorage";
 import { deleteValueInfo, clearAllValueInfos, removeDuplicateValueInfos, getDefaultCodingRules } from "@/lib/chatApi";
@@ -130,6 +130,9 @@ const ValueInfoItem = ({ valueInfo, onDelete }: { valueInfo: ValueInfo; onDelete
 const DatabaseSettings = ({ isOpen, onClose, contentOnly = false }: DatabaseSettingsProps) => {
   const [connectionString, setConnectionString] = useState("");
   const [tableName, setTableName] = useState("");
+  const [connectedTables, setConnectedTables] = useState<string[]>([]);
+  const [availableTables, setAvailableTables] = useState<string[]>([]);
+  const [isLoadingTables, setIsLoadingTables] = useState(false);
   const [contextSections, setContextSections] = useState<ContextSection[]>([]);
   // Initialize coding rules from localStorage if available
   const [codingRules, setCodingRules] = useState<CodingRules>(() => {
@@ -174,6 +177,19 @@ const DatabaseSettings = ({ isOpen, onClose, contentOnly = false }: DatabaseSett
       const savedCsvFiles = localStorage.getItem("db_csv_files");
 
       setTableName(savedTableName);
+      // Load connected tables (support multiple tables)
+      const savedConnectedTables = localStorage.getItem("db_connected_tables");
+      if (savedConnectedTables) {
+        try {
+          const parsed = JSON.parse(savedConnectedTables);
+          setConnectedTables(Array.isArray(parsed) ? parsed : (savedTableName ? [savedTableName] : []));
+        } catch (e) {
+          setConnectedTables(savedTableName ? [savedTableName] : []);
+        }
+      } else {
+        // Migrate from single table name to multiple tables
+        setConnectedTables(savedTableName ? [savedTableName] : []);
+      }
       // D1 doesn't use connection strings - clear any old connection string settings
       setConnectionString("");
 
@@ -422,11 +438,48 @@ VOLLEYBALL DATA UNDERSTANDING:
       if (success) {
         // Success is handled silently - the connection status will update automatically
         console.log("Database connection initialized successfully");
+        // Load available tables after successful connection
+        loadAvailableTables();
       }
     } catch (error) {
       // Error is handled silently - connection status will show as disconnected
       console.error("Database connection failed:", error);
     }
+  };
+
+  const loadAvailableTables = async () => {
+    setIsLoadingTables(true);
+    try {
+      const tables = await listDatabaseTables();
+      setAvailableTables(tables);
+    } catch (error) {
+      console.error("Failed to load available tables:", error);
+      setAvailableTables([]);
+    } finally {
+      setIsLoadingTables(false);
+    }
+  };
+
+  const handleAddTable = (table: string) => {
+    if (!connectedTables.includes(table)) {
+      const updated = [...connectedTables, table];
+      setConnectedTables(updated);
+      localStorage.setItem("db_connected_tables", JSON.stringify(updated));
+      window.dispatchEvent(new Event('databaseUpdated'));
+    }
+  };
+
+  const handleRemoveTable = (table: string) => {
+    const updated = connectedTables.filter(t => t !== table);
+    setConnectedTables(updated);
+    localStorage.setItem("db_connected_tables", JSON.stringify(updated));
+    // Also update legacy single table name for backward compatibility
+    if (updated.length > 0) {
+      localStorage.setItem("db_table_name", updated[0]);
+    } else {
+      localStorage.removeItem("db_table_name");
+    }
+    window.dispatchEvent(new Event('databaseUpdated'));
   };
 
   const handleSaveTableName = () => {
@@ -763,14 +816,20 @@ VOLLEYBALL DATA UNDERSTANDING:
             <label className="block text-sm font-medium mb-2">Database Connection</label>
             <div className="p-4 bg-accent/50 border border-border rounded-lg mb-2">
               <p className="text-sm text-foreground mb-2">
-                <strong>Connect Your Own Database via Cloudflare R2 + Workers:</strong> This app uses Cloudflare R2 (object storage) for caching and Cloudflare Workers as a query layer to your Neon Postgres database.
+                <strong>Connect Your Own Database via Cloudflare R2 + Workers:</strong> This setup is for your <strong>hosted website on Cloudflare Pages</strong>, not for local development. It uses Cloudflare R2 (object storage) for caching and Workers as a query layer to your Neon Postgres database.
               </p>
               <p className="text-sm text-foreground mb-2">
-                R2 stores cached JSON responses for fast queries, while Workers fetch fresh data from Neon when needed. Follow the setup instructions below to configure your R2 bucket and Neon connection.
+                <strong>How Caching Reduces Database Queries:</strong> R2 stores cached query results. When the same query is made again (even in different sessions), it's served from R2 cache instead of querying Neon. This dramatically reduces database load - identical queries only hit Neon once, then are cached for hours.
+              </p>
+              <p className="text-sm text-foreground mb-2">
+                <strong>💡 Alternative: Use CSV Files (Unlimited Queries):</strong> If you're worried about query limits, you can upload CSV files instead! CSV files are processed entirely in your browser using DuckDB WASM - this means <strong>unlimited queries with zero database costs</strong>. The data never leaves your browser, and you can query it as much as you want. Just use the "Upload CSV" button below.
+              </p>
+              <p className="text-sm text-foreground mb-2">
+                <strong>Important:</strong> The Neon connection string is configured in your Cloudflare Dashboard (see Step 7 below), not in this app. The "Test Database Connection" button below just verifies your connection is working.
               </p>
             </div>
             <div className="flex gap-2 mb-2">
-              <Button onClick={handleSaveConnectionString}>Connect to Database</Button>
+              <Button onClick={handleSaveConnectionString}>Test Database Connection</Button>
               <Button
                 variant="outline"
                 onClick={() => setShowSetupInstructions(!showSetupInstructions)}
@@ -791,19 +850,37 @@ VOLLEYBALL DATA UNDERSTANDING:
             </div>
             
             {showSetupInstructions && (
-              <div className="mt-4 p-4 bg-background border border-border rounded-lg">
+              <div className="mt-4 p-4 bg-background border border-border rounded-lg max-h-[600px] overflow-y-auto">
                 <h3 className="text-sm font-semibold mb-3">Cloudflare R2 + Workers Setup Instructions</h3>
                 <p className="text-xs text-muted-foreground mb-4">
-                  <strong>Important:</strong> This setup uses Cloudflare R2 (object storage) for caching and Workers to query your Neon Postgres database. You'll need both a Cloudflare account and a Neon account. If you're just using this website, you may need to contact the website administrator.
+                  <strong>Important:</strong> This setup uses Cloudflare R2 (object storage) for caching and Workers to query your Neon Postgres database. You'll need both a Cloudflare account and a Neon account.
                 </p>
                 <p className="text-xs text-muted-foreground mb-4">
                   <strong>How it works:</strong> R2 stores cached JSON responses (10GB free tier), and Workers act as a query layer that checks R2 first, then queries Neon Postgres if the data isn't cached. This gives you fast queries with your existing Neon database!
                 </p>
                 <p className="text-xs text-muted-foreground mb-4">
-                  <strong>Don't worry if you're not technical!</strong> These instructions are written step-by-step for everyone. You just need to follow them carefully.
+                  <strong>Query Reduction:</strong> Identical queries are cached for 1-24 hours (depending on data type). This means if 100 users run the same query, only the first one hits Neon - the other 99 get cached results. This dramatically reduces database load and costs.
                 </p>
                 
                 <div className="space-y-4 text-sm">
+                  <div>
+                    <h4 className="font-medium mb-2 text-primary">Quick Start: Connect to Existing Neon Database</h4>
+                    <p className="text-muted-foreground mb-2 text-xs">
+                      <strong>If you already have a Neon Postgres database:</strong>
+                    </p>
+                    <ol className="text-muted-foreground mb-2 text-xs list-decimal list-inside space-y-1">
+                      <li>Get your Neon connection string from <a href="https://console.neon.tech" target="_blank" rel="noopener noreferrer" className="text-primary underline">console.neon.tech</a> (see Step 5)</li>
+                      <li>Follow Steps 1-4 to set up Cloudflare account and tools</li>
+                      <li>Create an R2 bucket (Step 6) for caching</li>
+                      <li><strong>Configure the connection string in Cloudflare Dashboard</strong> (Step 7) - this is where you paste your connection string</li>
+                      <li>Click "Test Database Connection" above to verify it works</li>
+                      <li>Use "Load Available Tables" to see and select your existing tables</li>
+                    </ol>
+                    <p className="text-muted-foreground mb-2 text-xs mt-2">
+                      <strong>Note:</strong> The connection string is stored securely in Cloudflare's environment variables (server-side), not in this app. You configure it once in Cloudflare Dashboard, and then the app uses it automatically.
+                    </p>
+                  </div>
+
                   <div>
                     <h4 className="font-medium mb-2 text-primary">Step 1: Create a Free Cloudflare Account</h4>
                     <p className="text-muted-foreground mb-2 text-xs">
@@ -882,25 +959,48 @@ VOLLEYBALL DATA UNDERSTANDING:
                   </div>
 
                   <div>
-                    <h4 className="font-medium mb-2 text-primary">Step 5: Create Your Database</h4>
+                    <h4 className="font-medium mb-2 text-primary">Step 5: Get Your Neon Connection String</h4>
                     <p className="text-muted-foreground mb-2 text-xs">
-                      In the terminal, type this command (you can change "my-database" to any name you want):
+                      <strong>If you already have a Neon database:</strong>
                     </p>
-                    <div className="bg-secondary/50 p-3 rounded border border-border font-mono text-xs overflow-x-auto text-foreground">
-                      wrangler d1 create my-database
-                    </div>
-                    <p className="text-muted-foreground mt-2 text-xs">
-                      <strong>IMPORTANT:</strong> You'll see a long ID that looks like: <code className="bg-secondary px-1 rounded text-foreground">xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx</code>
+                    <ol className="text-muted-foreground mb-2 text-xs list-decimal list-inside space-y-1">
+                      <li>Go to <a href="https://console.neon.tech" target="_blank" rel="noopener noreferrer" className="text-primary underline">console.neon.tech</a> and log in</li>
+                      <li>Select your project (or create a new one if needed)</li>
+                      <li>Click on your database</li>
+                      <li>Go to "Connection Details" or "Connection String"</li>
+                      <li>Copy the connection string (it starts with <code className="bg-secondary px-1 rounded text-foreground">postgresql://</code>)</li>
+                      <li><strong>Save this connection string</strong> - you'll need it in Step 7</li>
+                    </ol>
+                    <p className="text-muted-foreground mb-2 text-xs mt-2">
+                      <strong>If you need to create a new Neon database:</strong>
                     </p>
-                    <p className="text-muted-foreground mt-1 text-xs">
-                      <strong>Copy that entire ID</strong> - you'll need it in the next step! (It's called the "database_id")
-                    </p>
+                    <ol className="text-muted-foreground mb-2 text-xs list-decimal list-inside space-y-1">
+                      <li>Go to <a href="https://console.neon.tech" target="_blank" rel="noopener noreferrer" className="text-primary underline">console.neon.tech</a> and sign up (free tier available)</li>
+                      <li>Create a new project</li>
+                      <li>Create a new database (or use the default one)</li>
+                      <li>Copy the connection string from the dashboard</li>
+                    </ol>
                   </div>
 
                   <div>
-                    <h4 className="font-medium mb-2 text-primary">Step 7: Configure Your Connection</h4>
+                    <h4 className="font-medium mb-2 text-primary">Step 6: Create R2 Bucket for Caching</h4>
                     <p className="text-muted-foreground mb-2 text-xs">
-                      Now you need to connect your R2 bucket and Neon database to this website.
+                      R2 is used to cache query results for faster performance. Create a bucket:
+                    </p>
+                    <ol className="text-muted-foreground mb-2 text-xs list-decimal list-inside space-y-1">
+                      <li>Go to <a href="https://dash.cloudflare.com" target="_blank" rel="noopener noreferrer" className="text-primary underline">dash.cloudflare.com</a></li>
+                      <li>Click "R2" in the left menu</li>
+                      <li>Click "Create bucket"</li>
+                      <li>Name it something like <code className="bg-secondary px-1 rounded text-foreground">volleyball-cache</code></li>
+                      <li>Click "Create bucket"</li>
+                      <li><strong>Remember the bucket name</strong> - you'll need it in Step 7</li>
+                    </ol>
+                  </div>
+
+                  <div>
+                    <h4 className="font-medium mb-2 text-primary">Step 7: Configure Your Connection in Cloudflare</h4>
+                    <p className="text-muted-foreground mb-2 text-xs">
+                      <strong>This is where you configure your Neon connection string.</strong> It's stored securely in Cloudflare (not in this app), and the app uses it automatically.
                     </p>
                     <p className="text-muted-foreground mb-2 text-xs">
                       <strong>Option A: Connect Through Cloudflare Dashboard (Recommended)</strong>
@@ -915,11 +1015,12 @@ VOLLEYBALL DATA UNDERSTANDING:
                       <li>Set the "Variable name" to: <code className="bg-secondary px-1 rounded text-foreground">R2_BUCKET</code></li>
                       <li>Select your R2 bucket from the dropdown (the one you created in Step 6)</li>
                       <li>Click "Save"</li>
-                      <li>Now scroll down to "Environment Variables"</li>
+                      <li>Now scroll down to "Environment Variables" section</li>
                       <li>Click "Add variable"</li>
                       <li>Set the "Variable name" to: <code className="bg-secondary px-1 rounded text-foreground">NEON_CONNECTION_STRING</code></li>
-                      <li>Paste your Neon connection string (from Step 5) as the value</li>
+                      <li><strong>Paste your Neon connection string here</strong> (the one you copied from Step 5 - it looks like <code className="bg-secondary px-1 rounded text-foreground">postgresql://user:password@host/database?sslmode=require</code>)</li>
                       <li>Click "Save" - Cloudflare will automatically redeploy your site</li>
+                      <li><strong>That's it!</strong> The connection string is now configured. Come back to this app and click "Test Database Connection" to verify it works.</li>
                     </ol>
                     <p className="text-muted-foreground mb-2 text-xs">
                       <strong>Option B: Using Wrangler CLI (If you have project files)</strong>
@@ -934,10 +1035,7 @@ VOLLEYBALL DATA UNDERSTANDING:
                       When prompted, paste your Neon connection string and press Enter.
                     </p>
                     <p className="text-muted-foreground mb-2 text-xs mt-2">
-                      <strong>Option C: If You're Using This Website (Not Deploying Your Own)</strong>
-                    </p>
-                    <p className="text-muted-foreground mb-2 text-xs">
-                      If you're just using this website and want to connect your own database, you may need to contact the website administrator or check if there's a way to enter your database credentials in the settings above.
+                      <strong>Important Note:</strong> The connection string is configured in Cloudflare Dashboard (server-side), not in this app's UI. This keeps your database credentials secure. Once configured in Cloudflare, the app will automatically use it when you click "Test Database Connection".
                     </p>
                     <p className="text-muted-foreground mb-2 text-xs">
                       <strong>Alternative:</strong> You can always use CSV files instead! Just upload your CSV files using the "Upload CSV" button below - no database setup needed.
@@ -945,85 +1043,50 @@ VOLLEYBALL DATA UNDERSTANDING:
                   </div>
 
                   <div>
-                    <h4 className="font-medium mb-2 text-primary">Step 8: Import Your CSV Data (Most Common)</h4>
+                    <h4 className="font-medium mb-2 text-primary">Step 8: Connect to Your Existing Tables</h4>
                     <p className="text-muted-foreground mb-2 text-xs">
-                      <strong>If you have a CSV file:</strong> You can import it directly into your Cloudflare D1 database using Wrangler (the tool you installed earlier).
-                    </p>
-                    <p className="text-muted-foreground mb-2 text-xs">
-                      <strong>Option A: Using an online CSV to SQL converter (Easiest - No coding required)</strong>
+                      <strong>After configuring the connection above:</strong>
                     </p>
                     <ol className="text-muted-foreground mb-2 text-xs list-decimal list-inside space-y-1">
-                      <li>Go to an online converter like <a href="https://www.convertcsv.com/csv-to-sql.htm" target="_blank" rel="noopener noreferrer" className="text-primary underline">convertcsv.com/csv-to-sql.htm</a> or search "CSV to SQL converter"</li>
-                      <li>Upload your CSV file</li>
-                      <li>Set "Table name" to something like <code className="bg-secondary px-1 rounded text-foreground">my_data</code> (remember this name - you'll need to enter it in the "Table Name" field above!)</li>
-                      <li>Make sure it's set to "SQLite" format (not MySQL or PostgreSQL)</li>
-                      <li>Click "Convert" and download the SQL file</li>
-                      <li>Save the downloaded file somewhere you can find it (like your Desktop or Documents folder)</li>
-                      <li>Open your terminal/command prompt (same as before)</li>
-                      <li>Navigate to where you saved the file, or use the full path to the file</li>
-                      <li>Run this command (replace "my-database" with your database name and "import.sql" with your file name):</li>
+                      <li>Click "Connect to Database" button above to test the connection</li>
+                      <li>If successful, click "Load Available Tables" in the "Connected Database Tables" section</li>
+                      <li>Select the tables you want to use from the list</li>
+                      <li>Selected tables will appear in the "Select data sources" dropdown when chatting</li>
                     </ol>
-                    <div className="bg-secondary/50 p-3 rounded border border-border font-mono text-xs overflow-x-auto text-foreground mt-1">
-                      wrangler d1 execute my-database --file=./import.sql
+                    <p className="text-muted-foreground mb-2 text-xs mt-2">
+                      <strong>Your existing tables are now ready to use!</strong> They'll appear alongside your CSV files in the data selector.
+                    </p>
+                  </div>
+
+                  <div>
+                    <h4 className="font-medium mb-2 text-primary">Optional: Import CSV Data to Neon</h4>
+                    <p className="text-muted-foreground mb-2 text-xs">
+                      <strong>If you want to import CSV data into your Neon database:</strong>
+                    </p>
+                    <p className="text-muted-foreground mb-2 text-xs">
+                      <strong>Option A: Using Neon's SQL Editor (Easiest)</strong>
+                    </p>
+                    <ol className="text-muted-foreground mb-2 text-xs list-decimal list-inside space-y-1">
+                      <li>Go to <a href="https://console.neon.tech" target="_blank" rel="noopener noreferrer" className="text-primary underline">console.neon.tech</a></li>
+                      <li>Select your project and database</li>
+                      <li>Click "SQL Editor" in the left menu</li>
+                      <li>Use the "Import" feature or paste SQL commands to create tables</li>
+                      <li>Or use a CSV import tool that supports PostgreSQL</li>
+                    </ol>
+                    <p className="text-muted-foreground mb-2 text-xs">
+                      <strong>Option B: Using psql (Command Line)</strong>
+                    </p>
+                    <p className="text-muted-foreground mb-2 text-xs">
+                      If you have <code className="bg-secondary px-1 rounded text-foreground">psql</code> installed, you can import CSV directly:
+                    </p>
+                    <div className="bg-secondary/50 p-3 rounded border border-border font-mono text-xs overflow-x-auto text-foreground">
+                      psql "your-neon-connection-string" -c "\COPY table_name FROM 'file.csv' WITH CSV HEADER;"
                     </div>
-                    <p className="text-muted-foreground mt-2 text-xs">
-                      <strong>Important:</strong> After importing, come back to this page and enter your table name in the "Table Name" field above, then click "Save".
+                    <p className="text-muted-foreground mb-2 text-xs mt-2">
+                      <strong>Option C: Use CSV Files Directly (No Import Needed)</strong>
                     </p>
                     <p className="text-muted-foreground mb-2 text-xs">
-                      <strong>Option B: Using a simple script (If you're comfortable with code)</strong>
-                    </p>
-                    <p className="text-muted-foreground mb-2 text-xs">
-                      If you're comfortable with code, you can create a simple script to convert your CSV. Create a new text file called <code className="bg-secondary px-1 rounded text-foreground">import-csv.js</code> (you can save it anywhere, like your Desktop), and paste this code (replace "your-file.csv" with the path to your CSV file):
-                    </p>
-                    <div className="bg-secondary/50 p-3 rounded border border-border font-mono text-xs overflow-x-auto max-h-48 overflow-y-auto text-foreground whitespace-pre">
-{`const fs = require('fs');
-const csv = fs.readFileSync('your-file.csv', 'utf8');
-const lines = csv.split('\\n');
-const headers = lines[0].split(',').map(h => h.trim().replace(/"/g, ''));
-let sql = 'CREATE TABLE IF NOT EXISTS \`my_table\` (\\n';
-sql += '\`id\` INTEGER PRIMARY KEY AUTOINCREMENT,\\n';
-headers.forEach(h => sql += \`\`\${h}\` TEXT,\\n\`);
-sql = sql.slice(0, -2) + '\\n);\\n\\n';
-for (let i = 1; i < lines.length; i++) {
-  const values = lines[i].split(',').map(v => v.trim().replace(/"/g, ''));
-  if (values.length === headers.length) {
-    sql += \`INSERT INTO \\\`my_table\\\` (\\\`\${headers.join('\\\`, \\\`')}\\\`) VALUES ('\${values.join("', '")}');\\n\`;
-  }
-}
-fs.writeFileSync('import.sql', sql);`}
-                    </div>
-                    <p className="text-muted-foreground mt-2 text-xs">
-                      Then run: <code className="bg-secondary px-1 rounded text-foreground">node import-csv.js</code> followed by <code className="bg-secondary px-1 rounded text-foreground">wrangler d1 execute my-database --file=./import.sql</code>
-                    </p>
-                    <p className="text-muted-foreground mt-3 mb-2 text-xs">
-                      <strong>Option C: Create Table Manually (If you don't have CSV data)</strong>
-                    </p>
-                    <p className="text-muted-foreground mb-2 text-xs">
-                      If you don't have a CSV file and want to create an empty table:
-                    </p>
-                    <p className="text-muted-foreground mb-2 text-xs">
-                      <strong>Create a new text file</strong> called <code className="bg-secondary px-1 rounded text-foreground">schema.sql</code> (you can save it anywhere, like your Desktop)
-                    </p>
-                    <p className="text-muted-foreground mb-2 text-xs">
-                      <strong>Copy and paste this into the file</strong> (customize the column names to match your needs):
-                    </p>
-                    <div className="bg-secondary/50 p-3 rounded border border-border font-mono text-xs overflow-x-auto max-h-48 overflow-y-auto text-foreground whitespace-pre">
-{`CREATE TABLE IF NOT EXISTS \`your_table_name\` (
-  \`id\` INTEGER PRIMARY KEY AUTOINCREMENT,
-  \`column1\` TEXT,
-  \`column2\` INTEGER,
-  \`column3\` REAL,
-  -- Add your columns here
-);`}
-                    </div>
-                    <p className="text-muted-foreground mt-2 text-xs">
-                      <strong>Save the file</strong>, then in the terminal, navigate to where you saved it (or use the full path), and run:
-                    </p>
-                    <div className="bg-secondary/50 p-3 rounded border border-border font-mono text-xs overflow-x-auto mt-1 text-foreground">
-                      wrangler d1 execute my-database --file=./schema.sql
-                    </div>
-                    <p className="text-muted-foreground mt-3 text-xs">
-                      <strong>Important:</strong> After importing your data or creating your table, come back to this settings page and enter your table name (e.g., <code className="bg-secondary px-1 rounded text-foreground">my_data</code> or <code className="bg-secondary px-1 rounded text-foreground">your_table_name</code>) in the "Table Name" field above, then click "Save".
+                      You can also just upload CSV files directly in this app - no database import needed! Use the "Upload CSV" button below.
                     </p>
                   </div>
 
@@ -1075,16 +1138,81 @@ fs.writeFileSync('import.sql', sql);`}
             )}
           </div>
 
-          {/* Table Name */}
+          {/* Connected Tables */}
           <div className="mb-6">
-            <label className="block text-sm font-medium mb-2">Table Name</label>
+            <label className="block text-sm font-medium mb-2">Connected Database Tables</label>
+            <p className="text-sm text-muted-foreground mb-3">
+              Select tables from your database to use in the app. These will appear alongside your CSV files.
+            </p>
+            
+            {/* Connected tables list */}
+            {connectedTables.length > 0 && (
+              <div className="mb-3 space-y-2">
+                {connectedTables.map((table) => (
+                  <div key={table} className="flex items-center justify-between p-2 bg-accent/50 border border-border rounded">
+                    <span className="text-sm font-mono">{table}</span>
+                    <Button
+                      variant="ghost"
+                      size="sm"
+                      onClick={() => handleRemoveTable(table)}
+                      className="h-6 w-6 p-0"
+                    >
+                      <X className="h-4 w-4" />
+                    </Button>
+                  </div>
+                ))}
+              </div>
+            )}
+
+            {/* Add table dropdown */}
             <div className="flex gap-2">
-              <Input
-                value={tableName}
-                onChange={(e) => setTableName(e.target.value)}
-                placeholder="combined_dvw"
-              />
-              <Button onClick={handleSaveTableName}>Save</Button>
+              <Button
+                variant="outline"
+                onClick={loadAvailableTables}
+                disabled={isLoadingTables}
+              >
+                {isLoadingTables ? "Loading..." : "Load Available Tables"}
+              </Button>
+            </div>
+
+            {/* Available tables list */}
+            {availableTables.length > 0 && (
+              <div className="mt-3 p-3 bg-background border border-border rounded max-h-48 overflow-y-auto">
+                <p className="text-xs text-muted-foreground mb-2">Click a table to add it:</p>
+                <div className="space-y-1">
+                  {availableTables
+                    .filter(table => !connectedTables.includes(table))
+                    .map((table) => (
+                      <button
+                        key={table}
+                        onClick={() => handleAddTable(table)}
+                        className="w-full text-left p-2 text-sm hover:bg-accent rounded border border-border"
+                      >
+                        <Plus className="h-3 w-3 inline mr-2" />
+                        {table}
+                      </button>
+                    ))}
+                </div>
+                {availableTables.filter(table => !connectedTables.includes(table)).length === 0 && (
+                  <p className="text-xs text-muted-foreground">All available tables are connected.</p>
+                )}
+              </div>
+            )}
+
+            {/* Legacy single table name input (for backward compatibility) */}
+            <div className="mt-4 pt-4 border-t border-border">
+              <label className="block text-sm font-medium mb-2">Legacy: Single Table Name</label>
+              <div className="flex gap-2">
+                <Input
+                  value={tableName}
+                  onChange={(e) => setTableName(e.target.value)}
+                  placeholder="combined_dvw"
+                />
+                <Button onClick={handleSaveTableName}>Save</Button>
+              </div>
+              <p className="text-xs text-muted-foreground mt-1">
+                This is for backward compatibility. Use "Connected Database Tables" above for multiple tables.
+              </p>
             </div>
           </div>
 

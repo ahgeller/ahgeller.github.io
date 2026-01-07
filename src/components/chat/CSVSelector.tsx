@@ -1,7 +1,7 @@
 import { useState, useEffect, useRef, useCallback, memo } from "react";
 import { createPortal } from "react-dom";
 import { Button } from "@/components/ui/button";
-import { FileText, X, Upload, Check } from "lucide-react";
+import { FileText, X, Upload, Check, Database } from "lucide-react";
 import { getCsvFileData, getValueInfo } from "@/lib/chatApi";
 import { stringifyCsv } from "@/lib/csvUtils";
 import { migrateLegacyCsvFile, saveCsvDataText, saveCsvDataBlob, getUniqueValuesFromFile, initDB, saveCsvFileMetadata, getAllCsvFileMetadata, saveAllCsvFileMetadata } from "@/lib/csvStorage";
@@ -32,12 +32,15 @@ interface CSVFile {
   tableName?: string; // DuckDB table name for efficient querying
   size?: number; // Original file size in bytes
   isParquet?: boolean; // Whether the file is stored in Parquet format
+  isDatabaseTable?: boolean; // True if this is a database table, not a CSV file
 }
 
 type ColumnMode = 'group' | 'display';
 
 const CSVSelector = ({ selectedCsvIds, selectedFilterColumns, selectedFilterValues, onSelectCsv, chatId, showGroupBy = false, disabled = false }: CSVSelectorProps) => {
   const [csvFiles, setCsvFiles] = useState<CSVFile[]>([]);
+  const [databaseTables, setDatabaseTables] = useState<CSVFile[]>([]);
+  const [allFiles, setAllFiles] = useState<CSVFile[]>([]); // Combined CSV files and database tables
   const [filteredCsvFiles, setFilteredCsvFiles] = useState<CSVFile[]>([]);
   const [isOpen, setIsOpen] = useState(false);
   const [columnModes, setColumnModes] = useState<Record<string, ColumnMode>>({});
@@ -117,6 +120,41 @@ const CSVSelector = ({ selectedCsvIds, selectedFilterColumns, selectedFilterValu
     onConfirm: (convert: boolean) => void;
   } | null>(null);
 
+  // Load connected database tables
+  const loadDatabaseTables = async () => {
+    try {
+      const savedConnectedTables = localStorage.getItem("db_connected_tables");
+      if (savedConnectedTables) {
+        const tables = JSON.parse(savedConnectedTables);
+        if (Array.isArray(tables) && tables.length > 0) {
+          // Create CSVFile objects for database tables
+          const tableFiles: CSVFile[] = tables.map((tableName: string) => ({
+            id: `db_table_${tableName}`,
+            name: tableName,
+            headers: [], // Will be loaded when needed
+            uploadedAt: Date.now(),
+            isDatabaseTable: true,
+            rowCount: 0, // Will be loaded when needed
+            data: [],
+          }));
+          setDatabaseTables(tableFiles);
+          return;
+        }
+      }
+      setDatabaseTables([]);
+    } catch (e) {
+      console.error("Error loading database tables:", e);
+      setDatabaseTables([]);
+    }
+  };
+
+  // Combine CSV files and database tables
+  useEffect(() => {
+    const combined = [...csvFiles, ...databaseTables];
+    setAllFiles(combined);
+    setFilteredCsvFiles(combined);
+  }, [csvFiles, databaseTables]);
+
   useEffect(() => {
     const loadCsvFiles = async () => {
       try {
@@ -136,10 +174,10 @@ const CSVSelector = ({ selectedCsvIds, selectedFilterColumns, selectedFilterValu
             // Legacy files (no isParquet property) were all converted to Parquet by default
             isParquet: meta.isParquet !== undefined ? meta.isParquet : true,
             data: [],
+            isDatabaseTable: false,
           }));
           
           setCsvFiles(files);
-          setFilteredCsvFiles(files);
           return;
         }
         
@@ -240,21 +278,30 @@ const CSVSelector = ({ selectedCsvIds, selectedFilterColumns, selectedFilterValu
     };
   
     loadCsvFiles();
+    loadDatabaseTables();
   
     const handleStorageChange = () => {
       loadCsvFiles();
+      loadDatabaseTables();
+    };
+
+    const handleDatabaseUpdate = () => {
+      loadDatabaseTables();
     };
   
     window.addEventListener("storage", handleStorageChange);
+    window.addEventListener("databaseUpdated", handleDatabaseUpdate);
 
     // Reduced from 1s to 5s to reduce CPU usage
     // Keep running even when tab is hidden to allow background processing
     const interval = setInterval(() => {
       loadCsvFiles();
+      loadDatabaseTables();
     }, 5000);
 
     return () => {
       window.removeEventListener("storage", handleStorageChange);
+      window.removeEventListener("databaseUpdated", handleDatabaseUpdate);
       clearInterval(interval);
     };
   }, []);
@@ -451,7 +498,19 @@ const CSVSelector = ({ selectedCsvIds, selectedFilterColumns, selectedFilterValu
           return convertToParquet;
         } catch (duckDBError) {
           console.error('DuckDB processing failed:', duckDBError);
-          throw new Error(`DuckDB processing failed: ${duckDBError instanceof Error ? duckDBError.message : 'Unknown error'}. DuckDB is required for data file processing.`);
+
+          // Check if this is a malformed CSV error (should skip and continue)
+          const errorMessage = duckDBError instanceof Error ? duckDBError.message : String(duckDBError);
+          const isMalformedFile = errorMessage.includes('has malformed data and cannot be processed');
+
+          if (isMalformedFile) {
+            // Malformed file - log warning but don't track it (don't count towards reset limit)
+            console.warn(`⚠️ Skipping malformed file: ${file.name}`);
+            throw new Error(errorMessage); // Re-throw to be caught by file loop handler
+          }
+
+          // For other DuckDB errors, throw as before
+          throw new Error(`DuckDB processing failed: ${errorMessage}. DuckDB is required for data file processing.`);
         }
       } else {
         throw new Error('DuckDB is required for data file processing. Please ensure DuckDB is available.');
@@ -475,11 +534,11 @@ const CSVSelector = ({ selectedCsvIds, selectedFilterColumns, selectedFilterValu
     }
   };
 
-  const handleFileUpload = async (event: React.ChangeEvent<HTMLInputElement>) => {
+  const handleFileUpload = async (event: any) => {
     const files = event.target.files;
     if (!files || files.length === 0) return;
 
-    const fileArray = Array.from(files);
+    const fileArray = Array.from(files) as File[];
     let convertToParquetChoice: boolean | undefined = undefined;
 
     try {
@@ -508,7 +567,7 @@ const CSVSelector = ({ selectedCsvIds, selectedFilterColumns, selectedFilterValu
           setUploadStatus({ 
             status: 'error', 
             message: `DuckDB initialization failed: ${initError instanceof Error ? initError.message : 'Unknown error'}. Please refresh the page and try again.`, 
-            fileName: fileArray.length > 1 ? `${fileArray.length} files` : fileArray[0].name
+            fileName: fileArray.length > 1 ? `${fileArray.length} files` : (fileArray[0] as File).name
           });
           setTimeout(() => setUploadStatus({ status: 'idle' }), 10000);
           return;
@@ -521,7 +580,7 @@ const CSVSelector = ({ selectedCsvIds, selectedFilterColumns, selectedFilterValu
         setUploadStatus({
           status: 'error',
           message: 'DuckDB is not available. Please refresh the page and try again. DuckDB is required for data file processing.',
-          fileName: fileArray.length > 1 ? `${fileArray.length} files` : fileArray[0].name
+          fileName: fileArray.length > 1 ? `${fileArray.length} files` : (fileArray[0] as File).name
         });
         setTimeout(() => setUploadStatus({ status: 'idle' }), 10000);
         return;
@@ -529,7 +588,7 @@ const CSVSelector = ({ selectedCsvIds, selectedFilterColumns, selectedFilterValu
 
       // If multiple files and none are Parquet, ask about conversion once for all files
       if (fileArray.length > 1 && convertToParquetChoice === undefined) {
-        const hasNonParquetFiles = fileArray.some(f => {
+        const hasNonParquetFiles = fileArray.some((f) => {
           const ext = f.name.toLowerCase().split('.').pop() || '';
           return ext !== 'parquet';
         });
@@ -538,7 +597,7 @@ const CSVSelector = ({ selectedCsvIds, selectedFilterColumns, selectedFilterValu
           setUploadStatus({
             status: 'reading',
             message: `Convert ${fileArray.length} files to Parquet format?`,
-            fileName: fileArray.length > 1 ? `${fileArray.length} files` : fileArray[0].name
+            fileName: fileArray.length > 1 ? `${fileArray.length} files` : (fileArray[0] as File).name
           });
 
           // Wait for user confirmation via custom UI
@@ -557,7 +616,7 @@ const CSVSelector = ({ selectedCsvIds, selectedFilterColumns, selectedFilterValu
             message: convertToParquetChoice
               ? `✓ Will convert ${fileArray.length} files to Parquet for better performance`
               : `✗ Skipping Parquet conversion for ${fileArray.length} files`,
-            fileName: fileArray.length > 1 ? `${fileArray.length} files` : fileArray[0].name
+            fileName: fileArray.length > 1 ? `${fileArray.length} files` : (fileArray[0] as File).name
           });
 
           // Brief pause to show the user's choice
@@ -566,10 +625,14 @@ const CSVSelector = ({ selectedCsvIds, selectedFilterColumns, selectedFilterValu
       }
 
       // Process each file sequentially
+      let successCount = 0;
+      let failedCount = 0;
+      const failedFiles: string[] = [];
+
       for (let i = 0; i < fileArray.length; i++) {
         const file = fileArray[i];
         const isLastFile = i === fileArray.length - 1;
-        
+
         try {
           if (fileArray.length > 1) {
             setUploadStatus({
@@ -578,35 +641,111 @@ const CSVSelector = ({ selectedCsvIds, selectedFilterColumns, selectedFilterValu
               fileName: file.name
             });
           }
-          
+
           // For single file, the prompt will be shown in processSingleFile
           // For multiple files, we already have the choice, so pass it along
           const parquetChoice = await processSingleFile(file, convertToParquetChoice);
-          
+
           // Use the first file's Parquet choice for all subsequent files (if not already set)
           if (i === 0 && convertToParquetChoice === undefined) {
             convertToParquetChoice = parquetChoice;
           }
-          
+
+          // Track successful upload
+          successCount++;
+
           if (isLastFile) {
-            setUploadStatus({ 
-              status: 'success', 
-              message: fileArray.length > 1 
-                ? `Successfully uploaded ${fileArray.length} files` 
-                : `Successfully uploaded ${file.name}`,
-              fileName: file.name 
-            });
-            setTimeout(() => setUploadStatus({ status: 'idle' }), 2000);
+            // Show final status based on success/failure counts
+            if (failedCount === 0) {
+              setUploadStatus({
+                status: 'success',
+                message: fileArray.length > 1
+                  ? `Successfully uploaded ${successCount} files`
+                  : `Successfully uploaded ${file.name}`,
+                fileName: file.name
+              });
+              setTimeout(() => setUploadStatus({ status: 'idle' }), 2000);
+            } else {
+              setUploadStatus({
+                status: 'error',
+                message: `Uploaded ${successCount} files, skipped ${failedCount} malformed files: ${failedFiles.join(', ')}`,
+                fileName: fileArray.length > 1 ? `${fileArray.length} files` : file.name
+              });
+              setTimeout(() => setUploadStatus({ status: 'idle' }), 5000);
+            }
           }
         } catch (fileError) {
-          console.error(`Error processing file ${file.name}:`, fileError);
-          // Continue with next file even if one fails
-          if (isLastFile) {
+          const errorMessage = fileError instanceof Error ? fileError.message : String(fileError);
+          const isMalformedFile = errorMessage.includes('has malformed data and cannot be processed');
+          const isMemoryCorrupted = errorMessage.includes('memory access out of bounds') ||
+                                    errorMessage.includes('DuckDB memory corrupted');
+
+          if (isMalformedFile) {
+            console.warn(`⚠️ SKIPPED malformed file: ${file.name}`);
+            failedCount++;
+            failedFiles.push(file.name);
+
+            // Show warning for this specific file
             setUploadStatus({
               status: 'error',
-              message: `Some files failed to upload. Check console for details.`,
-              fileName: fileArray.length > 1 ? `${fileArray.length} files` : file.name
+              message: `⚠️ Skipped "${file.name}" - malformed data. Continuing with remaining files...`,
+              fileName: file.name
             });
+            // Brief pause to show the warning
+            await new Promise(resolve => setTimeout(resolve, 2000));
+          } else if (isMemoryCorrupted) {
+            console.warn(`⚠️ DuckDB memory corrupted by file: ${file.name}. Resetting DuckDB...`);
+            failedCount++;
+            failedFiles.push(file.name);
+
+            // Reset DuckDB to recover from corruption
+            try {
+              const { resetDuckDB, initDuckDB } = await import('@/lib/duckdb');
+              await resetDuckDB();
+
+              // Show recovery message
+              setUploadStatus({
+                status: 'reading',
+                message: `⚠️ File "${file.name}" caused memory corruption. Resetting DuckDB and continuing...`,
+                fileName: file.name
+              });
+              await new Promise(resolve => setTimeout(resolve, 2000));
+
+              // Reinitialize DuckDB for remaining files
+              await initDuckDB();
+              console.log('✅ DuckDB reinitialized successfully');
+            } catch (resetError) {
+              console.error('Failed to reset DuckDB:', resetError);
+              // If reset fails, stop processing remaining files
+              setUploadStatus({
+                status: 'error',
+                message: `Failed to recover from DuckDB corruption. Please refresh the page.`,
+                fileName: file.name
+              });
+              setTimeout(() => setUploadStatus({ status: 'idle' }), 5000);
+              break; // Exit the loop
+            }
+          } else {
+            console.error(`Error processing file ${file.name}:`, fileError);
+            failedCount++;
+            failedFiles.push(file.name);
+          }
+
+          // Show final status on last file
+          if (isLastFile) {
+            if (successCount > 0) {
+              setUploadStatus({
+                status: 'error',
+                message: `Uploaded ${successCount} files, ${failedCount} failed. Check console for details.`,
+                fileName: fileArray.length > 1 ? `${fileArray.length} files` : file.name
+              });
+            } else {
+              setUploadStatus({
+                status: 'error',
+                message: `All files failed to upload. Check console for details.`,
+                fileName: fileArray.length > 1 ? `${fileArray.length} files` : file.name
+              });
+            }
             setTimeout(() => setUploadStatus({ status: 'idle' }), 5000);
           }
         }
@@ -633,16 +772,16 @@ const CSVSelector = ({ selectedCsvIds, selectedFilterColumns, selectedFilterValu
   // Filter CSV files based on search query
   useEffect(() => {
     if (!fileSearchQuery.trim()) {
-      setFilteredCsvFiles(csvFiles);
+      setFilteredCsvFiles(allFiles);
     } else {
       const query = fileSearchQuery.toLowerCase();
-      const filtered = csvFiles.filter(file => 
+      const filtered = allFiles.filter(file => 
         file.name.toLowerCase().includes(query) ||
-        file.headers.some(header => header.toLowerCase().includes(query))
+        (file.headers && file.headers.some(header => header.toLowerCase().includes(query)))
       );
       setFilteredCsvFiles(filtered);
     }
-  }, [fileSearchQuery, csvFiles]);
+  }, [fileSearchQuery, allFiles]);
   
   // Get available columns from selected CSV files (or all if none selected)
   const availableColumns = (() => {
@@ -659,11 +798,13 @@ const CSVSelector = ({ selectedCsvIds, selectedFilterColumns, selectedFilterValu
         file.headers.forEach(header => allHeaders.add(header));
       }
     });
-    
+
     // Try to get from Value Info if available (for selected files)
-    selectedCsvIds.forEach(csvId => {
+    if (selectedCsvIds.length > 1) {
+      // Multiple files - look for combined value info
       try {
-        const valueInfo = getValueInfo(csvId, 'csv');
+        const combinedId = `combined_${[...selectedCsvIds].sort().join('_')}`;
+        const valueInfo = getValueInfo(combinedId, 'csv', chatId);
         if (valueInfo && valueInfo.columns) {
           valueInfo.columns.forEach((col: any) => {
             if (col.name) allHeaders.add(col.name);
@@ -672,8 +813,20 @@ const CSVSelector = ({ selectedCsvIds, selectedFilterColumns, selectedFilterValu
       } catch (e) {
         // Fallback to headers
       }
-    });
-    
+    } else if (selectedCsvIds.length === 1) {
+      // Single file - get individual value info
+      try {
+        const valueInfo = getValueInfo(selectedCsvIds[0], 'csv', chatId);
+        if (valueInfo && valueInfo.columns) {
+          valueInfo.columns.forEach((col: any) => {
+            if (col.name) allHeaders.add(col.name);
+          });
+        }
+      } catch (e) {
+        // Fallback to headers
+      }
+    }
+
     return Array.from(allHeaders).map(col => ({ value: col, label: col })).sort((a, b) => a.label.localeCompare(b.label));
   })();
   
@@ -1148,9 +1301,11 @@ const CSVSelector = ({ selectedCsvIds, selectedFilterColumns, selectedFilterValu
       }
     };
 
-    const handleScroll = () => {
-      // Close dropdown when any parent scrolls
-      if (isOpen) {
+    const handleScroll = (event: Event) => {
+      // Only close dropdown if scrolling OUTSIDE the dropdown
+      // Don't close if scrolling within the dropdown itself
+      const target = event.target as Node;
+      if (isOpen && dropdownRef.current && !dropdownRef.current.contains(target)) {
         setIsOpen(false);
       }
     };
@@ -2446,8 +2601,7 @@ const CSVSelector = ({ selectedCsvIds, selectedFilterColumns, selectedFilterValu
         />
         <div className="flex items-center gap-1.5 flex-shrink-0">
         <Button
-          variant="outline"
-          size="sm"
+          {...({variant: "outline", size: "sm"} as any)}
           onClick={() => fileInputRef.current?.click()}
             disabled={(uploadStatus.status !== 'idle' && uploadStatus.status !== 'success' && uploadStatus.status !== 'error') || isAnyLoading || disabled}
           className="flex-shrink-0"
@@ -2501,8 +2655,7 @@ const CSVSelector = ({ selectedCsvIds, selectedFilterColumns, selectedFilterValu
         <div className="relative flex-1">
           <Button
             ref={buttonRef}
-            variant="outline"
-            size="sm"
+            {...({variant: "outline", size: "sm"} as any)}
             onClick={() => {
               if (buttonRef.current) {
                 setButtonRect(buttonRef.current.getBoundingClientRect());
@@ -2510,14 +2663,14 @@ const CSVSelector = ({ selectedCsvIds, selectedFilterColumns, selectedFilterValu
               setIsOpen(!isOpen);
             }}
             className="w-full justify-start"
-            disabled={csvFiles.length === 0 || isAnyLoading || disabled}
+            disabled={allFiles.length === 0 || isAnyLoading || disabled}
           >
             <FileText className="h-4 w-4 mr-2" />
             {selectedCsvIds.length > 0
-              ? `${selectedCsvIds.length} file${selectedCsvIds.length > 1 ? 's' : ''} selected`
-              : csvFiles.length === 0
-              ? "No data files"
-              : "Select files to combine"}
+              ? `${selectedCsvIds.length} data source${selectedCsvIds.length > 1 ? 's' : ''} selected`
+              : allFiles.length === 0
+              ? "No data sources"
+              : "Select data sources"}
           </Button>
 
           {isOpen && buttonRect && typeof document !== 'undefined' && createPortal(
@@ -2525,7 +2678,7 @@ const CSVSelector = ({ selectedCsvIds, selectedFilterColumns, selectedFilterValu
               <div
                 className="fixed inset-0 z-[9998]"
                 onClick={() => setIsOpen(false)}
-                onMouseDown={(e) => e.preventDefault()}
+                onMouseDown={(e: any) => e.preventDefault()}
               />
               <div
                 ref={dropdownRef}
@@ -2543,11 +2696,10 @@ const CSVSelector = ({ selectedCsvIds, selectedFilterColumns, selectedFilterValu
                 {selectedCsvIds.length > 0 && (
                   <div className="px-2 py-1 border-b border-border flex items-center justify-between">
                     <span className="text-xs text-muted-foreground">
-                      {selectedCsvIds.length} CSV{selectedCsvIds.length > 1 ? 's' : ''} selected
+                      {selectedCsvIds.length} data source{selectedCsvIds.length > 1 ? 's' : ''} selected
                     </span>
                     <Button
-                      variant="ghost"
-                      size="sm"
+                      {...({variant: "ghost", size: "sm"} as any)}
                       className="h-6 w-6 p-0"
                       onClick={() => {
                         onSelectCsv([], selectedFilterColumns, selectedFilterValues, [], {}, []);
@@ -2559,25 +2711,25 @@ const CSVSelector = ({ selectedCsvIds, selectedFilterColumns, selectedFilterValu
                   </div>
                 )}
                 {/* Search input for CSV files */}
-                {csvFiles.length > 3 && (
+                {allFiles.length > 3 && (
                   <div className="p-2 border-b border-border">
                     <input
                       type="text"
                       value={fileSearchQuery}
-                      onChange={(e) => setFileSearchQuery(e.target.value)}
-                      placeholder="Search CSV files..."
+                      onChange={(e: any) => setFileSearchQuery(e.target.value)}
+                      placeholder="Search data sources..."
                       className="w-full px-2 py-1 text-sm bg-secondary border border-border rounded"
-                      onClick={(e) => e.stopPropagation()}
+                      onClick={(e: any) => e.stopPropagation()}
                     />
                   </div>
                 )}
                 <div className="overflow-y-auto flex-1">
-                  {filteredCsvFiles.length === 0 ? (
+                  {filteredCsvFiles.length === 0 && allFiles.length === 0 ? (
                   <div className="p-4 text-center text-sm text-muted-foreground">
-                      {fileSearchQuery.trim() ? "No CSV files match your search" : "No CSV files"}
+                      {fileSearchQuery.trim() ? "No data sources match your search" : "No data sources"}
                   </div>
                 ) : (
-                    filteredCsvFiles.map((file) => {
+                    filteredCsvFiles.map(file => {
                       const isSelected = selectedCsvIds.includes(file.id);
                       return (
                         <button
@@ -2585,7 +2737,6 @@ const CSVSelector = ({ selectedCsvIds, selectedFilterColumns, selectedFilterValu
                           onClick={() => {
                             handleCsvToggle(file.id);
                             setFileSearchQuery("");
-                            setIsOpen(false);
                           }}
                           className={`w-full text-left px-2 py-1.5 hover:bg-accent transition-colors ${
                             isSelected ? "bg-accent" : ""
@@ -2598,11 +2749,19 @@ const CSVSelector = ({ selectedCsvIds, selectedFilterColumns, selectedFilterValu
                               }`}>
                                 {isSelected && <Check className="h-2.5 w-2.5 text-white" />}
                               </div>
-                              <FileText className="h-3.5 w-3.5 mr-1.5 flex-shrink-0" />
+                              {file.isDatabaseTable ? (
+                                <Database className="h-3.5 w-3.5 mr-1.5 flex-shrink-0 text-primary" />
+                              ) : (
+                                <FileText className="h-3.5 w-3.5 mr-1.5 flex-shrink-0" />
+                              )}
                               <span className="truncate" style={{ fontSize: '13px' }}>{file.name}</span>
                             </div>
                             <span className="text-muted-foreground ml-2 flex-shrink-0" style={{ fontSize: '11px' }}>
-                              ({(file.rowCount ?? file.data?.length ?? 0).toLocaleString()} rows, {file.headers.length} cols • {file.isParquet ? 'Parquet' : (file.name.split('.').pop()?.toUpperCase() || 'Data')})
+                              {file.isDatabaseTable ? (
+                                '(Database Table)'
+                              ) : (
+                                `(${(file.rowCount ?? file.data?.length ?? 0).toLocaleString()} rows, ${file.headers.length} cols • ${file.isParquet ? 'Parquet' : (file.name.split('.').pop()?.toUpperCase() || 'Data')})`
+                              )}
                             </span>
                           </div>
                         </button>

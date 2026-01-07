@@ -127,10 +127,20 @@ export function hasMatchFilters(
 export function hasValueInfoForCsvs(csvId: string | string[] | null, chatId?: string): boolean {
   if (!csvId) return false;
   const csvIds = Array.isArray(csvId) ? csvId : [csvId];
-  return csvIds.length > 0 && csvIds.every(id => {
-    const valueInfo = getValueInfo(id, 'csv', chatId);
+
+  if (csvIds.length > 1) {
+    // Multiple files - check for combined value info
+    // Use slice() to avoid mutating the original array
+    const combinedId = `combined_${[...csvIds].sort().join('_')}`;
+    const combinedValueInfo = getValueInfo(combinedId, 'csv', chatId);
+    return !!combinedValueInfo;
+  } else if (csvIds.length === 1) {
+    // Single file - check for individual value info
+    const valueInfo = getValueInfo(csvIds[0], 'csv', chatId);
     return !!valueInfo;
-  });
+  }
+
+  return false;
 }
 
 /**
